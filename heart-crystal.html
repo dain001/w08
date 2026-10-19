@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>하트 크리스탈</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Gowun+Dodum&display=swap">
+<style>
+  /* 레이아웃: 웹캠 전체 화면. 브이를 눈에 대면 사람 가슴께에 하트 크리스탈이 나타남. 글자·패널 없이 아래 동그라미 버튼 하나만 (고무풍선과 같은 틀) */
+  :root {
+    --ink: #2b2118;
+    --white: #ffffff;
+    --accent: #ff5fb0;
+    --display: "Jua", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    --body: "Gowun Dodum", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; background: #14110e; color: var(--white); font-family: var(--body); overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); background: #14110e; }
+  #fx { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 50%; }
+
+  /* 아래 가운데 동그라미: 지금 보이는 하트 색, 누르면 다른 색으로 */
+  .ring { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); width: 64px; height: 64px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.35)); }
+  .ring-gauge { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring-icon { position: absolute; left: 50%; top: 50%; width: 24px; height: 24px; transform: translate(-50%, -50%); transition: transform 300ms ease; }
+  .ring:hover .ring-icon, .ring:active .ring-icon { transform: translate(-50%, -50%) rotate(-180deg); }
+  .ring circle { fill: none; }
+  .ring-track { stroke: var(--white); stroke-width: 3; }
+  .ring-level { stroke: var(--accent); stroke-width: 5; stroke-linecap: round; stroke-dasharray: 176; stroke-dashoffset: 176; transition: stroke-dashoffset 200ms ease, stroke 200ms ease; }
+
+  .overlay { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.55); padding: 16px; text-align: center; }
+  .intro { display: grid; gap: 16px; justify-items: center; max-width: 380px; }
+  .intro h1 { font-family: var(--display); font-weight: 400; font-size: 40px; margin: 0; }
+  .intro p { margin: 0; line-height: 1.6; font-size: 16px; }
+  .start { font-family: var(--display); font-size: 18px; color: var(--ink); background: var(--white); padding: 12px 24px; border-radius: 999px; }
+  .start:focus-visible { border-radius: 999px; }
+  .intro small { font-size: 13px; line-height: 1.5; opacity: .8; }
+  .err { color: var(--white); font-size: 14px; line-height: 1.5; }
+  @media (prefers-reduced-motion: reduce) { .ring-icon { transition: none; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="fx"></canvas>
+
+  <button class="ring" id="reset" type="button" aria-label="하트 색 바꾸기">
+    <svg class="ring-gauge" viewBox="0 0 64 64" aria-hidden="true">
+      <circle class="ring-track" cx="32" cy="32" r="28"/>
+      <circle class="ring-level" id="ringLevel" cx="32" cy="32" r="28"/>
+    </svg>
+    <svg class="ring-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M19.5 3.5v5h-5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+
+  <div class="overlay" id="overlay">
+    <div class="intro">
+      <h1>하트 크리스탈</h1>
+      <p>손으로 <b>브이</b>를 만들어 <b>눈에 갖다 대면</b><br>사람들의 마음, 하트 크리스탈이 보여요.<br>브이를 뗐다가 다시 대면 <b>하트 색이 달라져요</b>.</p>
+      <button class="start" id="start" type="button">카메라 켜고 시작</button>
+      <small>빨강 정열의 사랑 · 핑크 두근거림 · 오렌지 첫눈에 반함 · 노랑 놀람<br>초록 우정 · 파랑 존경 · 보라 욕망<br>얼굴과 손이 같이 화면에 보이게 해주세요. 스페이스바를 누르고 있어도 돼요.</small>
+      <div class="err" id="err" hidden></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const video = document.getElementById('cam');
+const canvas = document.getElementById('fx');
+const ctx = canvas.getContext('2d');
+const ringLevel = document.getElementById('ringLevel');
+const errEl = document.getElementById('err');
+
+/* ───── 손으로 조절하기 쉬운 값들 ───── */
+const TUNE = {
+  eyeReach: 0.45,      // 브이 사이가 눈에서 이만큼(얼굴 너비 기준) 안에 오면 '눈에 갖다 댐'
+  onFrames: 4,         // 브이를 눈에 대고 이만큼(프레임) 유지하면 하트가 보이기 시작
+  offFrames: 10,       // 브이를 떼고 이만큼(프레임) 지나면 하트가 사라짐 (잠깐 인식이 끊겨도 유지)
+  heartSize: 0.8,      // 하트 크기 (반지름이 얼굴 너비의 몇 배). 0.8이면 하트 폭이 얼굴보다 넓음
+  smooth: 0.35,        // 하트가 몸을 따라가는 부드러움
+};
+
+/* 하트 크리스탈 색 = 감정 (슈가슈가룬). 그림을 바꿀 땐 drawCrystal만 갈아끼우면 됨 */
+const HEARTS = [
+  { name: '빨강', feel: '정열의 사랑', c: '#ff2d4a', d: '#a5001c', l: '#ffb3bd' },
+  { name: '핑크', feel: '두근거림', c: '#ff5fb0', d: '#c2186f', l: '#ffd1ea' },
+  { name: '오렌지', feel: '첫눈에 반함', c: '#ff9a52', d: '#c55a14', l: '#ffd8b8' },
+  { name: '노랑', feel: '놀람', c: '#ffe066', d: '#c9a200', l: '#fff6c9' },
+  { name: '초록', feel: '우정', c: '#47c95e', d: '#167a2c', l: '#c4f2cc' },
+  { name: '파랑', feel: '존경', c: '#36b6ea', d: '#0d6f9a', l: '#c4ecfb' },
+  { name: '보라', feel: '욕망', c: '#a24be0', d: '#5d1a91', l: '#e3c6f7' },
+];
+
+let W = 0, H = 0, dpr = 1;
+let vision = false, onCount = 0, offCount = 0, colorIdx = -1, visionT = 0;
+let hearts = {}, sparkles = [], vSpot = null;
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+
+/* ───── 브이 인식 ───── */
+const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0)) || 1e-6;
+function isV(hd) {
+  const w = hd.w;
+  const ext = (tip, pip) => d3(w[tip], w[0]) > d3(w[pip], w[0]) * 1.1;   // 손가락이 펴짐
+  const curl = (tip, pip) => d3(w[tip], w[0]) < d3(w[pip], w[0]) * 1.05; // 손가락이 접힘
+  const palm = d3(w[0], w[9]);
+  const spread = d3(w[8], w[12]) / palm > 0.25;                          // 검지·중지가 벌어짐
+  return ext(8, 6) && ext(12, 10) && curl(16, 14) && curl(20, 18) && spread;
+}
+// 브이를 눈에 갖다 댔는지: 검지·중지 사이(브이 틈)가 눈 가까이에
+function vAtEye(hands, faces) {
+  for (const hd of hands) {
+    if (!isV(hd)) continue;
+    const s = hd.s;
+    const gap = { x: (s[6].x + s[10].x + s[7].x + s[11].x) / 4, y: (s[6].y + s[10].y + s[7].y + s[11].y) / 4 };
+    for (const f of faces) for (const eye of [f.eyeL, f.eyeR]) {
+      if (Math.hypot(gap.x - eye.x, gap.y - eye.y) < f.width * TUNE.eyeReach) return { gap, eye, s };
+    }
+  }
+  return null;
+}
+let forceVision = false;
+function readSigns() {
+  if (window.trackFrame) { try { window.trackFrame(); } catch (e) { console.error(e); } }
+  const hands = window.handData || [], faces = window.faceData || [];
+  const hit = vAtEye(hands, faces);
+  vSpot = hit;
+  if (hit || forceVision) { onCount++; offCount = 0; } else { offCount++; onCount = 0; }
+  if (!vision && onCount >= TUNE.onFrames) startVision();
+  if (vision && offCount > TUNE.offFrames) { vision = false; playOff(); }
+  // 보이는 사람마다 하트 위치: 턱 아래 가슴께
+  for (const f of faces) {
+    const down = { x: f.chin.x - f.eyeMid.x, y: f.chin.y - f.eyeMid.y };
+    const tx = f.chin.x + down.x * 0.7, ty = f.chin.y + down.y * 0.7, size = f.width * TUNE.heartSize;
+    let h = hearts[f.id];
+    if (!h) h = hearts[f.id] = { x: tx, y: ty, size, pop: 0, seen: 0 };
+    const k = TUNE.smooth;
+    h.x += (tx - h.x) * k; h.y += (ty - h.y) * k; h.size += (size - h.size) * k; h.seen = 0;
+  }
+  for (const id in hearts) if (++hearts[id].seen > 30) delete hearts[id];
+}
+function startVision() {
+  vision = true; visionT = 0;
+  // 다시 볼 때마다 다른 색(감정)
+  let n; do { n = Math.floor(Math.random() * HEARTS.length); } while (n === colorIdx);
+  colorIdx = n;
+  for (const id in hearts) hearts[id].pop = 0;
+  playOn();
+}
+
+/* ───── 그리기 ───── */
+/* 하트 크리스탈 (보석처럼 깎인 하트). 바깥 각진 테두리 → 안쪽 고리 → 가운데 빛살 순으로 면을 나눠 그림 */
+const HEART_OUT = [[0, -0.42], [0.22, -0.78], [0.55, -0.9], [0.86, -0.7], [1.0, -0.32], [0.9, 0.08], [0.62, 0.45], [0.3, 0.76], [0, 1.0],
+  [-0.3, 0.76], [-0.62, 0.45], [-0.9, 0.08], [-1.0, -0.32], [-0.86, -0.7], [-0.55, -0.9], [-0.22, -0.78]];
+const HEART_C = [0, -0.12];
+const HEART_IN = HEART_OUT.map((p, i) => {
+  const q = HEART_OUT[(i + 1) % HEART_OUT.length], m = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+  return [HEART_C[0] + (m[0] - HEART_C[0]) * 0.55, HEART_C[1] + (m[1] - HEART_C[1]) * 0.55];
+});
+const FACET_JIT = HEART_OUT.map((_, i) => [Math.sin(i * 12.9) * 0.5, Math.sin(i * 7.3 + 1) * 0.5, Math.sin(i * 3.1 + 2) * 0.5]);
+function heartPath(r) {
+  const p = new Path2D();
+  HEART_OUT.forEach(([x, y], i) => i ? p.lineTo(x * r, y * r) : p.moveTo(x * r, y * r));
+  p.closePath(); return p;
+}
+function shadeFacet(pts, col, r, jit) {
+  // 위왼쪽에서 빛이 온다고 보고 면마다 밝기를 다르게
+  const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length, cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+  const l = Math.hypot(cx - HEART_C[0], cy - HEART_C[1]) || 1;
+  const light = ((cx - HEART_C[0]) * -0.6 + (cy - HEART_C[1]) * -0.8) / l * 0.6 + jit;
+  ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x * r, y * r) : ctx.moveTo(x * r, y * r)); ctx.closePath();
+  ctx.fillStyle = col.c; ctx.fill();
+  ctx.fillStyle = light > 0 ? `rgba(255,255,255,${Math.min(0.55, light * 0.6)})` : `rgba(0,0,0,${Math.min(0.45, -light * 0.5)})`;
+  ctx.fill();
+  ctx.strokeStyle = col.d + 'cc'; ctx.lineWidth = Math.max(1, r * 0.012); ctx.stroke();
+}
+function drawCrystal(x, y, r, col, t, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y + Math.sin(t / 25) * r * 0.05);           // 둥실둥실
+  ctx.rotate(Math.sin(t / 40) * 0.05);
+  // 빛 번짐
+  const glow = ctx.createRadialGradient(0, 0, r * 0.4, 0, 0, r * 1.9);
+  glow.addColorStop(0, col.c + '99'); glow.addColorStop(1, col.c + '00');
+  ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, r * 1.9, 0, Math.PI * 2); ctx.fill();
+  ctx.lineJoin = 'round';
+  const N = HEART_OUT.length;
+  for (let i = 0; i < N; i++) {
+    const j = (i + 1) % N, h = (i + N - 1) % N;
+    shadeFacet([HEART_OUT[i], HEART_OUT[j], HEART_IN[i]], col, r, FACET_JIT[i][0]);        // 바깥 면
+    shadeFacet([HEART_OUT[i], HEART_IN[i], HEART_IN[h]], col, r, FACET_JIT[i][1]);         // 사이 면
+    shadeFacet([HEART_IN[h], HEART_IN[i], HEART_C], col, r, FACET_JIT[i][2] + 0.25);       // 가운데 면
+  }
+  // 가운데에서 뻗는 빛살 (사진 속 하얀 별 모양)
+  ctx.fillStyle = col.l + 'd0';
+  for (let i = 0; i < N; i += 2) {
+    const a = HEART_IN[i], k = 0.55 + (i % 4 === 0 ? 0.35 : 0.1);
+    const tip = [HEART_C[0] + (a[0] - HEART_C[0]) * k, HEART_C[1] + (a[1] - HEART_C[1]) * k];
+    const nx = -(a[1] - HEART_C[1]) * 0.12, ny = (a[0] - HEART_C[0]) * 0.12;
+    ctx.beginPath(); ctx.moveTo((HEART_C[0] + nx) * r, (HEART_C[1] + ny) * r); ctx.lineTo(tip[0] * r, tip[1] * r); ctx.lineTo((HEART_C[0] - nx) * r, (HEART_C[1] - ny) * r); ctx.closePath(); ctx.fill();
+  }
+  ctx.strokeStyle = col.d; ctx.lineWidth = Math.max(1.5, r * 0.025); ctx.stroke(heartPath(r));
+  // 반짝
+  star(-r * 0.55, -r * 0.55, r * 0.12 * (0.7 + 0.3 * Math.sin(t / 6)), 'rgba(255,255,255,.95)');
+  star(r * 0.5, r * 0.15, r * 0.07 * (0.7 + 0.3 * Math.sin(t / 5 + 2)), 'rgba(255,255,255,.85)');
+  ctx.restore();
+}
+function star(x, y, s, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y - s); ctx.quadraticCurveTo(x, y, x + s, y); ctx.quadraticCurveTo(x, y, x, y + s);
+  ctx.quadraticCurveTo(x, y, x - s, y); ctx.quadraticCurveTo(x, y, x, y - s); ctx.closePath(); ctx.fill();
+}
+function update() {
+  visionT++;
+  for (const id in hearts) { const h = hearts[id]; h.pop = vision ? Math.min(1, h.pop + 0.025) : Math.max(0, h.pop - 0.06); }   // 약 0.7초에 걸쳐 떠오름
+  // 브이 틈에서 반짝이가 흩날림
+  if (vision && vSpot && Math.random() < 0.6) {
+    const c = HEARTS[colorIdx];
+    sparkles.push({ x: vSpot.gap.x + (Math.random() - 0.5) * 30, y: vSpot.gap.y + (Math.random() - 0.5) * 30, vx: (Math.random() - 0.5) * 2, vy: -0.5 - Math.random() * 1.5, s: 3 + Math.random() * 5, life: 1, c: Math.random() < 0.5 ? '#ffffff' : c.l });
+  }
+  for (const h of Object.values(hearts)) if (vision && h.pop < 1 && Math.random() < 0.5) {
+    const a = Math.random() * Math.PI * 2, r = h.size * (0.8 + Math.random() * 0.8);
+    sparkles.push({ x: h.x + Math.cos(a) * r, y: h.y + Math.sin(a) * r, vx: Math.cos(a) * 1.5, vy: Math.sin(a) * 1.5, s: 3 + Math.random() * 6, life: 1, c: '#ffffff' });
+  }
+  for (const p of sparkles) { p.x += p.vx; p.y += p.vy; p.life -= 0.025; }
+  sparkles = sparkles.filter(p => p.life > 0);
+}
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  const col = colorIdx >= 0 ? HEARTS[colorIdx] : HEARTS[1];
+  // 하트가 보이는 동안: 화면 가장자리가 하트 색으로 몽글몽글
+  const amt = Math.max(0, ...Object.values(hearts).map(h => h.pop), vision ? Math.min(1, visionT / 15) : 0);
+  if (amt > 0) {
+    const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
+    v.addColorStop(0, col.c + '00'); v.addColorStop(1, col.c + Math.round(amt * 110).toString(16).padStart(2, '0'));
+    ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  }
+  for (const h of Object.values(hearts)) {
+    if (h.pop <= 0) continue;
+    // 가슴 아래쪽에서 커지며 스르륵 떠오름 (끝에서 살짝 통)
+    const e = 1 - Math.pow(1 - h.pop, 3), bounce = h.pop < 1 ? 1 + Math.sin(h.pop * Math.PI) * 0.08 : 1;
+    const r = h.size * (0.35 + 0.65 * e) * bounce, y = Math.min(h.y, H - 95 - h.size);   // 화면 아래로 잘리지 않게
+    drawCrystal(h.x, y + (1 - e) * h.size * 1.4, r, col, visionT, Math.min(1, h.pop * 2));
+  }
+  // 얼굴이 안 보여도 브이 모드면 가운데에 하트 (마우스/스페이스 비상용)
+  if (!Object.keys(hearts).length && amt > 0) drawCrystal(W / 2, H * 0.55 + (1 - amt) * 120, Math.min(W, H) * 0.22 * (0.4 + 0.6 * amt), col, visionT, amt);
+  for (const p of sparkles) { ctx.globalAlpha = p.life; star(p.x, p.y, p.s * p.life, p.c); }
+  ctx.globalAlpha = 1;
+  // 브이를 눈에 댄 자리: 반짝이는 작은 원
+  if (vSpot) {
+    ctx.strokeStyle = `rgba(255,255,255,${vision ? 0.8 : 0.4})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(vSpot.eye.x, vSpot.eye.y, 18 + Math.sin(visionT / 5) * 3, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+
+/* ───── 소리 ───── */
+let ac = null;
+function chime(freqs, gap, vol) {
+  if (!ac) return;
+  freqs.forEach((f, i) => {
+    const t = ac.currentTime + i * gap, o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine'; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.02); g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.65);
+  });
+}
+function playOn() { chime([1319, 1568, 1976, 2637], 0.07, 0.12); }
+function playOff() { chime([1568, 1175], 0.06, 0.05); }
+
+/* ───── 비상용: 스페이스바를 누르고 있거나 화면을 누르고 있으면 브이를 눈에 댄 것처럼 ───── */
+window.addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); forceVision = true; } });
+window.addEventListener('keyup', e => { if (e.code === 'Space') forceVision = false; });
+canvas.addEventListener('pointerdown', () => { forceVision = true; });
+window.addEventListener('pointerup', () => { forceVision = false; });
+
+function loop() {
+  requestAnimationFrame(loop);
+  readSigns();
+  update();
+  ringLevel.style.stroke = colorIdx >= 0 ? HEARTS[colorIdx].c : '';
+  ringLevel.style.strokeDashoffset = vision ? 0 : 176;
+  draw();
+}
+
+const ERR_TEXT = {
+  NotAllowedError: '권한이 거부됐어요',
+  NotFoundError: '카메라를 찾지 못했어요',
+  NotReadableError: '다른 앱이 쓰고 있거나 맥 시스템 설정에서 막혀 있어요',
+  NoMediaDevices: '이 화면에서는 카메라를 쓸 수 없어요 (크롬에서 직접 열어주세요)',
+};
+async function start() {
+  const startBtn = document.getElementById('start');
+  startBtn.disabled = true;
+  startBtn.textContent = '허용을 기다리는 중…';
+  ac = new (window.AudioContext || window.webkitAudioContext)();
+  ac.resume();
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw { name: 'NoMediaDevices' };
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720 } });
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+  } catch (e) {
+    errEl.innerHTML = '카메라를 켜지 못했어요 (' + (ERR_TEXT[e.name] || e.name) + ').<br>일단 들어가면 스페이스바나 화면을 눌러서 해볼 수 있어요.';
+    errEl.hidden = false;
+    startBtn.disabled = false;
+    startBtn.textContent = '그래도 들어가기';
+    startBtn.removeEventListener('click', start);
+    startBtn.addEventListener('click', () => { document.getElementById('overlay').hidden = true; }, { once: true });
+    return;
+  }
+  document.getElementById('overlay').hidden = true;
+}
+document.getElementById('start').addEventListener('click', start);
+document.getElementById('reset').addEventListener('click', () => { startVision(); visionT = 0; offCount = 0; onCount = 99; document.getElementById('reset').blur(); });
+
+resize();
+requestAnimationFrame(loop);
+</script>
+
+<script type="module">
+/* 손·얼굴 인식 (MediaPipe): 손 2개(브이 모양), 얼굴 여러 개(눈·턱 위치) */
+import { FilesetResolver, HandLandmarker, FaceLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+
+let handLandmarker = null, faceLandmarker = null, visionFiles = null, delegate = 'GPU', lastVideoTime = -1, switching = false;
+const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+async function createModels(dg) {
+  handLandmarker = await HandLandmarker.createFromOptions(visionFiles, {
+    baseOptions: { modelAssetPath: HAND_MODEL, delegate: dg },
+    runningMode: 'VIDEO', numHands: 2,
+    minHandDetectionConfidence: 0.4, minHandPresenceConfidence: 0.4, minTrackingConfidence: 0.4,
+  });
+  faceLandmarker = await FaceLandmarker.createFromOptions(visionFiles, {
+    baseOptions: { modelAssetPath: FACE_MODEL, delegate: dg },
+    runningMode: 'VIDEO', numFaces: 4,
+  });
+  delegate = dg;
+}
+async function fallbackToCPU() {
+  if (switching || delegate === 'CPU') return;
+  switching = true; handLandmarker = null; faceLandmarker = null;
+  try { await createModels('CPU'); } catch (e) { console.error(e); }
+  switching = false;
+}
+
+// 카메라 화면 속 점(0~1)을 실제 화면 좌표로 (거울 모드 + 화면 꽉 채우기 반영)
+function toScreen(p) {
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+  const scale = Math.max(W / vw, H / vh);
+  const offX = (W - vw * scale) / 2, offY = (H - vh * scale) / 2;
+  return { x: W - (p.x * vw * scale + offX), y: p.y * vh * scale + offY };
+}
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+let handLms = [], handWorld = [], faceLms = [];
+window.trackFrame = () => {
+  if (handLandmarker && faceLandmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    try {
+      const now = performance.now();
+      const r = handLandmarker.detectForVideo(video, now);
+      handLms = r.landmarks || []; handWorld = r.worldLandmarks || [];
+      faceLms = faceLandmarker.detectForVideo(video, now).faceLandmarks || [];
+    } catch (e) { console.error(e); fallbackToCPU(); }
+  }
+  window.handData = handLms.map((lm, k) => ({
+    s: lm.map(toScreen),
+    w: (handWorld[k] && handWorld[k].length === 21) ? handWorld[k].map(p => ({ x: p.x, y: p.y, z: p.z })) : lm.map(p => ({ x: p.x, y: p.y, z: p.z })),
+  }));
+  // 얼굴: 두 눈 가운데, 턱 끝, 얼굴 너비. id는 화면 위 순서대로 (사람이 여러 명일 때 하트가 섞이지 않게)
+  window.faceData = faceLms.map(lm => {
+    const s = i => toScreen(lm[i]);
+    const eyeL = mid(s(33), s(133)), eyeR = mid(s(362), s(263)), chin = s(152);
+    const l = s(234), r = s(454);
+    return { eyeL, eyeR, eyeMid: mid(eyeL, eyeR), chin, width: Math.hypot(l.x - r.x, l.y - r.y) };
+  }).sort((a, b) => a.chin.x - b.chin.x).map((f, i) => ({ ...f, id: 'f' + i }));
+};
+
+try {
+  visionFiles = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+  try { await createModels('GPU'); }
+  catch (e) { console.warn('GPU 실패, CPU로 다시 시도', e); await createModels('CPU'); }
+} catch (e) {
+  console.warn('손·얼굴 인식을 불러오지 못했어요. 스페이스바로 대신할 수 있어요.', e);
+}
+</script>
+<script>
+/* 놀이 화면 테두리
+   - 홈에서 열면(?shell=1): 홈과 똑같은 아이보리 모니터 + 파란 창 + 작업표시줄을 그리고, 놀이 화면을 그 창 안에 쏙 맞춰 넣음
+   - 파일을 바로 열면: 화면 가장자리에 파란 창 테두리만
+   - 창 오른쪽 위 ✕(닫기) → 홈으로. 마우스 클릭 / ESC / 검지 끝으로 ✕를 1초 가리키기
+   - 웹캠 화면에는 홈처럼 은은한 모니터 도트를 얹음 */
+(function () {
+  const NAMES = { 'ddakji-blow': '딱지 불기', 'balloon-blow': '고무풍선', 'slime-bottle': '액체괴물', 'sticky-hand': '찐득이',
+    'water-gun': '물총', 'dalgona': '달고나', 'heart-crystal': '하트 크리스탈' };
+  const HOLD_MS = 1000;
+  const here = (location.pathname.split('/').pop() || '').replace(/\.html$/, '');
+  const shell = new URLSearchParams(location.search).has('shell');
+  const goHome = () => {
+    if (goHome.done) return; goHome.done = true;
+    if (!shell) { document.body.style.transition = 'opacity 250ms ease'; document.body.style.opacity = '0'; }
+    setTimeout(() => { location.href = 'index.html?from=' + encodeURIComponent(here); }, shell ? 0 : 260);
+  };
+
+  const css = document.createElement('style');
+  css.textContent = `
+    .xpf-bar { position: fixed; z-index: 1001; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; box-sizing: border-box;
+      background: linear-gradient(180deg, #0997ff 0%, #0053ee 9%, #0050ee 45%, #0066ff 88%, #0053ee 100%); border-radius: 8px 8px 0 0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.35); font: 400 14px/1 "Jua", "Tahoma", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; color: #fff;
+      text-shadow: 1px 1px 1px rgba(0,0,0,.5); user-select: none; }
+    .xpf-ico { width: 16px; height: 16px; flex: none; border-radius: 3px; background: linear-gradient(135deg, #fff, #cfe3ff); box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+    .xpf-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .xpf-btn { position: relative; width: 22px; height: 22px; flex: none; border-radius: 3px; border: 1px solid #fff; padding: 0; cursor: pointer; overflow: hidden;
+      background: linear-gradient(180deg, #4a8cff, #1f5fe0); box-shadow: inset 0 0 1px rgba(0,0,0,.4); display: grid; place-items: center; }
+    .xpf-btn:hover { filter: brightness(1.15); }
+    .xpf-btn:focus-visible { outline: 2px dotted #fff; outline-offset: 2px; }
+    .xpf-btn svg { width: 12px; height: 12px; position: relative; }
+    .xpf-x { background: linear-gradient(180deg, #e98a6c, #d24b26 55%, #c03b1a); }
+    .xpf-x.hot { filter: brightness(1.25); transform: scale(1.12); }
+    .xpf-fill { position: absolute; left: 0; bottom: 0; width: 100%; height: 0%; background: rgba(255,255,255,.55); }
+    .xpf-side { position: fixed; z-index: 1001; pointer-events: none; background: #0831d9; }
+    .xpf-dots { position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(circle, transparent 40%, rgba(0,0,0,.3) 85%) 0 0 / 3px 3px,
+                  repeating-linear-gradient(0deg, rgba(0,0,0,.05) 0 1px, transparent 1px 3px); }
+    .xpf-rgb { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: screen;
+      background: repeating-linear-gradient(90deg, rgba(255,60,60,.05) 0 1px, rgba(60,255,90,.05) 1px 2px, rgba(70,110,255,.05) 2px 3px); }
+    /* 모니터 (홈과 같은 치수) */
+    .xpf-monitor { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; z-index: 1000; pointer-events: none; }
+    .xpf-glass { position: fixed; z-index: 1000; pointer-events: none; border-radius: 3.6vmin / 4.2vmin;
+      box-shadow: inset 0 0 7vmin 1vmin rgba(0,0,0,.6), inset 0 0 1.5vmin rgba(0,0,0,.5);
+      background: radial-gradient(ellipse 70% 45% at 28% 12%, rgba(255,255,255,.1), transparent 60%); }
+    .xpf-led { position: fixed; right: 5vmin; bottom: 3vmin; width: 0.9vmin; height: 0.9vmin; min-width: 6px; min-height: 6px; border-radius: 50%; z-index: 1002;
+      background: #62e36b; box-shadow: 0 0 6px #62e36b, 0 0 14px rgba(98,227,107,.5); pointer-events: none; }
+    .xpf-task { position: fixed; z-index: 1001; display: flex; align-items: stretch; overflow: hidden; font-family: "Gowun Dodum", "Tahoma", sans-serif;
+      background: linear-gradient(180deg, #3d8af7 0%, #245edb 9%, #2257d5 50%, #1f4fc0 90%, #1941a5 100%); box-shadow: 0 -1px 0 #0c3db6; }
+    .xpf-start { display: flex; align-items: center; padding: 0 1.4em 0 1em; border-radius: 0 12px 12px 0; color: #fff; font-family: "Jua", sans-serif; font-style: italic; cursor: pointer;
+      background: linear-gradient(180deg, #5eb75e 0%, #3c9a3c 12%, #3a993a 70%, #2f7f2f 100%); box-shadow: inset -1px 0 2px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.35); text-shadow: 1px 1px 1px rgba(0,0,0,.5); }
+    .xpf-tasks { flex: 1; display: flex; align-items: center; padding: 0 8px; }
+    .xpf-tb { height: 76%; display: flex; align-items: center; padding: 0 14px; border-radius: 3px; color: #fff; background: linear-gradient(180deg, #1e52b7, #1c49a8); box-shadow: inset 0 0 0 1px rgba(0,0,0,.35), inset 1px 1px 2px rgba(0,0,0,.35); white-space: nowrap; }
+    .xpf-tray { display: flex; align-items: center; padding: 0 14px 0 12px; color: #fff;
+      background: linear-gradient(180deg, #19b9f3 0%, #0f8fe0 10%, #0f8bdc 85%, #0c6fbf 100%); box-shadow: inset 1px 0 0 #0b5ea8, inset 2px 0 0 rgba(255,255,255,.25); }
+  `;
+  document.head.appendChild(css);
+  const cam = document.getElementById('cam');
+  if (cam) for (const k of ['xpf-dots', 'xpf-rgb']) { const d = document.createElement('div'); d.className = k; cam.after(d); }
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') goHome(); });
+
+  const BTNS = `<button class="xpf-btn" type="button" data-act="min" aria-label="닫고 홈으로"><svg viewBox="0 0 12 12"><rect x="2" y="8" width="6" height="2.4" fill="#fff"/></svg></button>
+    <button class="xpf-btn" type="button" data-act="max" aria-label="전체 화면"><svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" fill="none" stroke="#fff" stroke-width="1.6"/><rect x="1.5" y="1.5" width="9" height="2.4" fill="#fff"/></svg></button>
+    <button class="xpf-btn xpf-x" type="button" data-act="close" aria-label="닫고 홈으로"><span class="xpf-fill"></span><svg viewBox="0 0 12 12"><path d="M2.5 2.5 L9.5 9.5 M9.5 2.5 L2.5 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg></button>`;
+  const bar = document.createElement('div');
+  bar.className = 'xpf-bar';
+  bar.innerHTML = `<span class="xpf-ico"></span><span class="xpf-title">${NAMES[here] || document.title}</span>${BTNS}`;
+  document.body.appendChild(bar);
+  const sides = ['l', 'r', 'b'].map(() => { const d = document.createElement('div'); d.className = 'xpf-side'; document.body.appendChild(d); return d; });
+  bar.addEventListener('click', e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    if (b.dataset.act === 'max') {
+      if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen().catch(() => {});
+      b.blur();
+    } else goHome();
+  });
+
+  // ───── 모니터 모드: 놀이 화면(#stage)을 창 안 크기로 줄여서 넣음 ─────
+  let mon = null, glass = null, task = null, map = { s: 1, tx: 0, ty: 0 };
+  const stage = document.getElementById('stage');
+  if (shell) {
+    mon = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); mon.setAttribute('class', 'xpf-monitor'); document.body.appendChild(mon);
+    glass = document.createElement('div'); glass.className = 'xpf-glass'; document.body.appendChild(glass);
+    const led = document.createElement('div'); led.className = 'xpf-led'; document.body.appendChild(led);
+    task = document.createElement('div'); task.className = 'xpf-task';
+    task.innerHTML = `<div class="xpf-start">시작</div><div class="xpf-tasks"><div class="xpf-tb">${NAMES[here] || ''}</div></div><div class="xpf-tray"><span class="xpf-clock"></span></div>`;
+    document.body.appendChild(task);
+    task.querySelector('.xpf-start').addEventListener('click', goHome);
+    const clock = () => { const d = new Date(); task.querySelector('.xpf-clock').textContent = (d.getHours() < 12 ? '오전 ' : '오후 ') + ((d.getHours() + 11) % 12 + 1) + ':' + String(d.getMinutes()).padStart(2, '0'); };
+    clock(); setInterval(clock, 10000);
+    document.documentElement.style.background = '#e9e1cd';
+  }
+  const place = (el, x, y, w, h) => Object.assign(el.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+  const realW = () => document.documentElement.clientWidth, realH = () => document.documentElement.clientHeight;
+  let body = null;
+  function layout() {
+    const W = realW(), H = realH();
+    if (!shell) {
+      place(bar, 0, 0, W, 30);
+      place(sides[0], 0, 30, 4, H - 30); place(sides[1], W - 4, 30, 4, H - 30); place(sides[2], 0, H - 4, W, 4);
+      return;
+    }
+    // 홈 index.html과 같은 숫자: 테두리 3.2vmin, 아래 7.5vmin, 안쪽 홈 1.3vmin, 작업표시줄 clamp(30px, 4.6vmin, 44px)
+    const vm = Math.min(W, H) / 100, pad = 3.2 * vm, padB = 7.5 * vm, rec = 1.3 * vm;
+    const sx = pad + rec, sy = pad + rec, sw = W - 2 * (pad + rec), sh = H - pad - padB - 2 * rec;
+    const rx = 3.6 * vm, ry = 4.2 * vm, barH = Math.max(30, Math.min(44, 4.6 * vm));
+    // 아이보리 테두리 (가운데 화면 자리만 뚫림)
+    const rr = (x, y, w, h, a, b) => `M${x + a},${y} H${x + w - a} A${a},${b} 0 0 1 ${x + w},${y + b} V${y + h - b} A${a},${b} 0 0 1 ${x + w - a},${y + h} H${x + a} A${a},${b} 0 0 1 ${x},${y + h - b} V${y + b} A${a},${b} 0 0 1 ${x + a},${y} Z`;
+    mon.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    mon.innerHTML = `<defs><radialGradient id="xpfIv" cx="50%" cy="0%" r="100%"><stop offset="0" stop-color="#f8f3e6"/><stop offset=".55" stop-color="#ece4cf"/><stop offset="1" stop-color="#ddd2b8"/></radialGradient>
+      <linearGradient id="xpfRec" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cfc4a8"/><stop offset="1" stop-color="#e2d8bf"/></linearGradient></defs>
+      <path fill="url(#xpfIv)" fill-rule="evenodd" d="M0,0 H${W} V${H} H0 Z ${rr(pad, pad, W - 2 * pad, H - pad - padB, 2.4 * vm, 2.4 * vm)}"/>
+      <path fill="url(#xpfRec)" fill-rule="evenodd" d="${rr(pad, pad, W - 2 * pad, H - pad - padB, 2.4 * vm, 2.4 * vm)} ${rr(sx, sy, sw, sh, rx, ry)}"/>`;
+    place(glass, sx, sy, sw, sh);
+    // 창(제목줄 + 파란 테두리 3px)과 작업표시줄
+    place(bar, sx, sy, sw, 29);
+    place(task, sx, sy + sh - barH, sw, barH);
+    task.style.fontSize = (barH * 0.36) + 'px'; task.querySelector('.xpf-start').style.fontSize = (barH * 0.5) + 'px';
+    task.style.borderRadius = `0 0 ${rx}px ${rx}px / 0 0 ${ry}px ${ry}px`;
+    bar.style.borderRadius = `${rx}px ${rx}px 0 0 / ${ry}px ${ry}px 0 0`; bar.style.paddingLeft = (rx * 0.6 + 8) + 'px'; bar.style.paddingRight = (rx * 0.5 + 4) + 'px';
+    const by = sy + 29, bh = sh - barH - 29 - 3, bx = sx + 3, bw = sw - 6;
+    place(sides[0], sx, by, 3, bh + 3); place(sides[1], sx + sw - 3, by, 3, bh + 3); place(sides[2], sx, by + bh, sw, 3);
+    // 놀이 화면을 창 안 자리에 그대로 넣음: 놀이 쪽에는 '화면 크기 = 창 안 크기'라고 알려줘서 잘리거나 찌그러지지 않게
+    map = { s: 1, tx: bx, ty: by };
+    body = { w: Math.round(bw), h: Math.round(bh) };
+    if (stage) Object.assign(stage.style, { inset: 'auto', left: bx + 'px', top: by + 'px', width: body.w + 'px', height: body.h + 'px', overflow: 'hidden' });
+  }
+  if (shell) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, get: () => body ? body.w : realW() });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => body ? body.h : realH() });
+  }
+  let relaying = false;
+  function relayout() {
+    if (relaying) return; relaying = true;
+    layout();
+    if (shell) window.dispatchEvent(new Event('resize'));   // 놀이가 새 크기로 다시 그리게
+    relaying = false;
+  }
+  relayout(); addEventListener('resize', relayout);
+
+  // 마우스 좌표도 줄인 화면에 맞게 바꿔줌 (놀이 화면 안 캔버스 클릭이 제자리를 가리키도록)
+  if (shell && stage) {
+    for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+      stage.addEventListener(type, e => {
+        if (e.__xpf || !(e.target instanceof HTMLCanvasElement)) return;
+        e.stopImmediatePropagation();
+        const ev = new PointerEvent(type, { bubbles: true, cancelable: true, clientX: (e.clientX - map.tx) / map.s, clientY: (e.clientY - map.ty) / map.s, button: e.button, buttons: e.buttons, pointerId: e.pointerId });
+        ev.__xpf = true; e.target.dispatchEvent(ev);
+      }, true);
+    }
+  }
+
+  // 손으로: 놀이마다 손 정보 모양이 달라서 검지 끝 위치를 찾아봄 (놀이 화면 좌표 → 실제 화면 좌표)
+  function fingerTip() {
+    const hds = window.handData || [];
+    let p = null;
+    for (const hd of hds) {
+      if (!hd) continue;
+      if (hd.s && hd.s[8]) { p = hd.s[8]; break; }
+      if (hd.index) { p = hd.index; break; }
+      if (hd.tips && hd.tips[0]) { p = hd.tips[0]; break; }
+      if (hd.anchor) { p = hd.anchor; break; }
+    }
+    if (!p) try { if (typeof hand !== 'undefined' && hand && hand.pinch) p = hand.pinch; } catch (e) {}
+    return p && { x: p.x * map.s + map.tx, y: p.y * map.s + map.ty };
+  }
+  const xBtn = bar.querySelector('.xpf-x'), fill = bar.querySelector('.xpf-fill');
+  let since = 0;
+  function tick(t) {
+    requestAnimationFrame(tick);
+    const p = fingerTip(), r = xBtn.getBoundingClientRect();
+    const on = p && Math.abs(p.x - (r.left + r.width / 2)) < 60 && p.y - (r.top + r.height / 2) < 80 && p.y > r.top - 60;   // ✕ 근처(넉넉하게)
+    if (on) { if (!since) since = t; } else since = 0;
+    const k = since ? Math.min(1, (t - since) / HOLD_MS) : 0;
+    fill.style.height = (k * 100) + '%';
+    xBtn.classList.toggle('hot', !!on);
+    if (k >= 1) goHome();
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

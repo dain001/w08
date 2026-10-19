@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>고무풍선 불기</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Gowun+Dodum&display=swap">
+<style>
+  /* 레이아웃: 웹캠 전체 화면 + 입에 문 빨대와 풍선. 글자·패널 없이 아래 동그라미 버튼 하나만 (딱지 불기와 같은 틀) */
+  :root {
+    --ink: #2b2118;
+    --white: #ffffff;
+    --breath: #ffd23f;
+    --accent: #e8452c;
+    --display: "Jua", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    --body: "Gowun Dodum", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; background: #14110e; color: var(--white); font-family: var(--body); overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); background: #14110e; }
+  #fx { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--breath); outline-offset: 4px; border-radius: 50%; }
+
+  /* 아래 가운데 동그라미: 테두리가 입김 세기만큼 노랗게 차오름, 누르면 처음부터 */
+  .ring { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); width: 64px; height: 64px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.35)); }
+  .ring-gauge { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring-icon { position: absolute; left: 50%; top: 50%; width: 24px; height: 24px; transform: translate(-50%, -50%); transition: transform 300ms ease; }
+  .ring:hover .ring-icon, .ring:active .ring-icon { transform: translate(-50%, -50%) rotate(-180deg); }
+  .ring circle { fill: none; }
+  .ring-track { stroke: var(--white); stroke-width: 3; }
+  .ring-level { stroke: var(--breath); stroke-width: 5; stroke-linecap: round; stroke-dasharray: 176; stroke-dashoffset: 176; transition: stroke-dashoffset 60ms linear; }
+
+  /* 오른쪽 위 작은 동그라미: 누르면 마이크 감도 조절이 나타남 */
+  .tune-btn { position: absolute; top: 46px; right: 16px; width: 30px; height: 30px; border: 2px solid var(--white); border-radius: 50%; display: grid; place-items: center; filter: drop-shadow(0 1px 3px rgba(0,0,0,.35)); }
+  .tune-btn svg { width: 14px; height: 14px; }
+  .tune-panel { position: absolute; top: 86px; right: 16px; display: flex; gap: 10px; align-items: center; padding: 8px 12px; border: 1px solid rgba(255,255,255,.8); background: rgba(0,0,0,.35); font-size: 13px; }
+  .tune-panel input { width: 110px; accent-color: var(--breath); }
+
+  .overlay { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.55); padding: 16px; text-align: center; }
+  .intro { display: grid; gap: 16px; justify-items: center; max-width: 360px; }
+  .intro h1 { font-family: var(--display); font-weight: 400; font-size: 40px; margin: 0; }
+  .intro p { margin: 0; line-height: 1.6; font-size: 16px; }
+  .start { font-family: var(--display); font-size: 18px; color: var(--ink); background: var(--white); padding: 12px 24px; border-radius: 999px; }
+  .start:focus-visible { border-radius: 999px; }
+  .intro small { font-size: 13px; line-height: 1.5; opacity: .8; }
+  .err { color: var(--white); font-size: 14px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="fx"></canvas>
+
+  <button class="ring" id="reset" type="button" aria-label="처음부터 다시">
+    <svg class="ring-gauge" viewBox="0 0 64 64" aria-hidden="true">
+      <circle class="ring-track" cx="32" cy="32" r="28"/>
+      <circle class="ring-level" id="ringLevel" cx="32" cy="32" r="28"/>
+    </svg>
+    <!-- 처음부터 아이콘 (빙글 화살표) -->
+    <svg class="ring-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M19.5 3.5v5h-5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+
+  <button class="tune-btn" id="tuneBtn" type="button" aria-label="마이크 감도" aria-expanded="false">
+    <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 4h12M1 10h12" stroke="#fff" stroke-width="1.6"/><circle cx="5" cy="4" r="2" fill="#fff"/><circle cx="9" cy="10" r="2" fill="#fff"/></svg>
+  </button>
+  <div class="tune-panel" id="tunePanel" hidden>
+    <label for="sens">마이크 감도</label>
+    <input id="sens" type="range" min="1" max="20" step="1" value="5">
+  </div>
+
+  <div class="overlay" id="overlay">
+    <div class="intro">
+      <h1>고무풍선 불기</h1>
+      <p>공중에 뜬 빨대를 엄지·검지로 <b>집어서</b> 입에 가져가요.<br><b>"후~" 길게</b> 불다가 빨대를 떼면 풍선이 날아가요.<br>너무 크게 불면 터져요!</p>
+      <button class="start" id="start" type="button">카메라·마이크 켜고 시작</button>
+      <small>손 인식이 안 되면 빨대를 클릭, 마이크가 안 되면 스페이스바.<br>처음부터 다시는 아래 동그라미나 R키.</small>
+      <div class="err" id="err" hidden></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const video = document.getElementById('cam');
+const canvas = document.getElementById('fx');
+const ctx = canvas.getContext('2d');
+const ringLevel = document.getElementById('ringLevel');
+const sensEl = document.getElementById('sens');
+const errEl = document.getElementById('err');
+
+let W = 0, H = 0, dpr = 1;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ───── 손으로 조절하기 쉬운 값들 (디자인 바꾸기 전 원래 값 그대로) ───── */
+const TUNE = {
+  blowThreshold: 0.103,  // 이 세기보다 세게 불어야 풍선이 커짐 (0~1). 낮출수록 약하게 불어도 커짐
+  micBoost: 1,           // 마이크 소리를 몇 배로 키워서 들을지. 높일수록 예민해짐
+  lowOnly: false,        // true면 마이크에 직접 부는 '웅~' 바람 소리만 인정, false면 입으로 내는 '슈~' 소리도 인정
+  growSpeed: 2.6,        // 풍선이 커지는 속도
+  minRelease: 0.35,      // 이 크기(최대 대비) 이상이어야 빨대를 뗄 때 풍선이 날아감
+  popMin: 0.85,          // 풍선이 터지는 크기 범위 (얼굴 폭 기준 배수)
+  popMax: 1.3,
+  strawLength: 0.6,      // 빨대 길이 (얼굴 폭 기준 배수)
+  pinchRatio: 0.5,       // 엄지·검지 사이가 손 크기의 이 비율보다 가까우면 '집기'
+  releaseRatio: 0.75,    // 집은 뒤에는 이 비율보다 벌려야 놓은 걸로 봄 (흔들려도 안 떨어지게)
+  grabRadius: 0.8,       // 손이 빨대에서 이 거리(빨대 길이 기준) 안이면 집을 수 있음
+  attachDistance: 0.4,   // 빨대 끝이 입에서 이 거리(얼굴 폭 기준) 안이면 입에 붙음
+};
+
+/* 풍선 그림: img에 그림 파일 경로를 넣으면 코드 도형 대신 그 그림을 그림
+   예) img: 'img/balloon-red.png'  (풍선 입구가 위쪽을 향한 그림) */
+const DESIGNS = [
+  { color: '#e8452c', img: null },
+  { color: '#2f6fd6', img: null },
+  { color: '#3a9d5d', img: null },
+  { color: '#f2b705', img: null },
+  { color: '#7a4cc2', img: null },
+];
+/* 빨대 그림: img에 그림 파일 경로 (입에 무는 쪽이 위, 세로로 긴 그림) */
+const STRAW = { color: '#ffd23f', img: null };
+
+[...DESIGNS, STRAW].forEach(d => {
+  if (typeof d.img === 'string') { const im = new Image(); im.src = d.img; d.img = im; }
+});
+const ready = im => im && im.complete && im.naturalWidth;
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const unit = (a, b) => { const d = dist(a, b) || 1; return { x: (b.x - a.x) / d, y: (b.y - a.y) / d }; };
+
+/* 인식 결과 (아래 인식 코드가 채움) */
+let face = null;   // { mouth, width }
+let hand = null;   // { pinch, pinching }
+
+/* 빨대 상태: 'idle'(공중에 떠 있음) → 'held'(손으로 집음) → 'attached'(입에 물음) */
+let state = 'idle';
+let straw = { x: 0, y: 0, angle: -0.5 };
+let lastDir = { x: 0.45, y: 0.9 };
+let lostFrames = 0;
+let mouseAttached = false;
+let balloon, floating, particles, designIndex = 0;
+
+function newBalloon() {
+  return { r: 0, design: DESIGNS[designIndex], popAt: TUNE.popMin + Math.random() * (TUNE.popMax - TUNE.popMin) };
+}
+function resetAll() {
+  designIndex = 0;
+  balloon = newBalloon();
+  floating = [];
+  particles = [];
+  state = 'idle'; mouseAttached = false; lostFrames = 0;
+}
+function restPos() { return { x: W * 0.72, y: H * 0.55 }; }
+function faceW() { return face ? face.width : Math.min(W, H) * 0.3; }
+function strawLen() { return faceW() * TUNE.strawLength; }
+
+function updateState() {
+  const L = strawLen();
+  if (state === 'idle') {
+    const rp = restPos();
+    straw.x += (rp.x - straw.x) * 0.2; straw.y += (rp.y - straw.y) * 0.2;
+    if (hand && hand.pinching && nearStraw(hand.pinch)) { state = 'held'; lostFrames = 0; }
+  }
+  if (state === 'held') {
+    if (!hand || !hand.pinching) { if (++lostFrames > 10) state = 'idle'; return; }
+    lostFrames = 0;
+    straw.x = hand.pinch.x; straw.y = hand.pinch.y;
+    if (face) {
+      const toMouth = unit(hand.pinch, face.mouth);
+      const tip = { x: hand.pinch.x + toMouth.x * L * 0.3, y: hand.pinch.y + toMouth.y * L * 0.3 };
+      if (dist(tip, face.mouth) < face.width * TUNE.attachDistance) { state = 'attached'; lostFrames = 0; }
+    }
+  }
+  if (state === 'attached') {
+    if (mouseAttached) return;
+    // 얼굴이 사라지거나, 손을 놓거나, 손을 입에서 멀리 떼면 빨대가 입에서 떨어짐
+    if (!face) { if (++lostFrames > 20) detach(); return; }
+    if (!hand || !hand.pinching) { if (++lostFrames > 15) detach(); return; }
+    lostFrames = 0;
+    lastDir = unit(face.mouth, hand.pinch);
+    if (dist(face.mouth, hand.pinch) > L * 1.1) detach();
+  }
+}
+
+function nearStraw(p) {
+  const { top, bottom } = strawEnds();
+  const mid = { x: (top.x + bottom.x) / 2, y: (top.y + bottom.y) / 2 };
+  return dist(p, mid) < strawLen() * TUNE.grabRadius;
+}
+
+/* 빨대 위치: top = 입에 무는 쪽, bottom = 풍선이 달린 쪽 */
+function strawEnds() {
+  const L = strawLen();
+  if (state === 'attached' && face) {
+    const top = face.mouth;
+    return { top, bottom: { x: top.x + lastDir.x * L, y: top.y + lastDir.y * L }, dir: lastDir };
+  }
+  let dir;
+  if (state === 'held' && face) dir = unit(face.mouth, straw);
+  else dir = { x: Math.cos(Math.PI / 2 + straw.angle), y: Math.sin(Math.PI / 2 + straw.angle) };
+  const top = { x: straw.x - dir.x * L * 0.3, y: straw.y - dir.y * L * 0.3 };
+  return { top, bottom: { x: top.x + dir.x * L, y: top.y + dir.y * L }, dir };
+}
+
+/* 빨대를 입에서 떼면: 충분히 불었으면 풍선이 날아감 → 다음 색 풍선 */
+function detach() {
+  const { bottom, dir } = strawEnds();
+  const maxR = faceW() * balloon.popAt;
+  if (balloon.r > maxR * TUNE.minRelease) {
+    floating.push({ x: bottom.x + dir.x * balloon.r * 0.9, y: bottom.y + dir.y * balloon.r * 0.9, r: balloon.r, design: balloon.design,
+      vx: (Math.random() - 0.5) * 0.8, vy: -1.2 - Math.random() * 0.8, t: Math.random() * 10 });
+    playTone(660, 0.08);
+  }
+  designIndex = (designIndex + 1) % DESIGNS.length;
+  balloon = newBalloon();
+  mouseAttached = false;
+  state = hand && hand.pinching ? 'held' : 'idle';
+  lostFrames = 0;
+}
+
+/* 불기: 부는 동안만 커지고, 너무 크게 불면 터짐 */
+function stepBalloon(level) {
+  if (state !== 'attached') return;
+  if (level > TUNE.blowThreshold) {
+    // 문턱만 넘으면 일정하게 커지고, 세게 불수록 조금 더 빨리 커짐
+    balloon.r += (0.5 + level) * TUNE.growSpeed * (faceW() / 250);
+    if (balloon.r > faceW() * balloon.popAt) pop();
+  }
+}
+function pop() {
+  const { bottom, dir } = strawEnds();
+  const c = { x: bottom.x + dir.x * balloon.r * 0.9, y: bottom.y + dir.y * balloon.r * 0.9 };
+  for (let i = 0; i < 28; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 3 + Math.random() * 8;
+    particles.push({ x: c.x + Math.cos(a) * balloon.r * 0.6, y: c.y + Math.sin(a) * balloon.r * 0.6,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, w: 6 + Math.random() * 14, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.4,
+      color: balloon.design.color, life: 1 });
+  }
+  playPop();
+  balloon = newBalloon();
+}
+
+/* ───── 그리기 ───── */
+function drawBalloon(x, y, r, design, angle, wob) {
+  if (r < 2) return;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  const rx = r * (1 + wob), ry = r * 1.08 * (1 - wob);
+  if (ready(design.img)) {
+    ctx.drawImage(design.img, -rx, -ry, rx * 2, ry * 2);
+  } else {
+    // 풍선 입구(매듭): 빨대와 닿는 부분
+    ctx.fillStyle = design.color;
+    ctx.strokeStyle = '#2b2118'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(-r * 0.12, -ry * 0.96); ctx.lineTo(r * 0.12, -ry * 0.96); ctx.lineTo(0, -ry * 0.8); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.55)';
+    ctx.beginPath(); ctx.ellipse(-rx * 0.4, -ry * 0.25, rx * 0.16, ry * 0.1, -0.6, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawStraw() {
+  const { top, bottom, dir } = strawEnds();
+  const w = Math.max(8, faceW() * 0.06);
+  // 손이 빨대 가까이 오면 하얗게 빛나서 '집을 수 있다'는 걸 알려줌
+  if (state === 'idle' && hand && nearStraw(hand.pinch)) {
+    ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineCap = 'round'; ctx.lineWidth = w + 22;
+    ctx.beginPath(); ctx.moveTo(top.x, top.y); ctx.lineTo(bottom.x, bottom.y); ctx.stroke();
+  }
+  if (ready(STRAW.img)) {
+    ctx.save();
+    ctx.translate(top.x, top.y);
+    ctx.rotate(Math.atan2(dir.y, dir.x) - Math.PI / 2);
+    ctx.drawImage(STRAW.img, -w, 0, w * 2, strawLen());
+    ctx.restore();
+    return;
+  }
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#2b2118'; ctx.lineWidth = w + 5;
+  ctx.beginPath(); ctx.moveTo(top.x, top.y); ctx.lineTo(bottom.x, bottom.y); ctx.stroke();
+  ctx.strokeStyle = STRAW.color; ctx.lineWidth = w;
+  ctx.stroke();
+}
+
+function draw(t) {
+  ctx.clearRect(0, 0, W, H);
+
+  floating.forEach(b => drawBalloon(b.x, b.y, b.r, b.design, Math.sin(b.t) * 0.15, Math.sin(b.t * 2) * 0.02));
+
+  // 80% 넘게 부풀면 바들바들 떪
+  if (state === 'attached' && balloon.r > 0) {
+    const { bottom, dir } = strawEnds();
+    const wob = Math.sin(t / 90) * 0.02 + (balloon.r / (faceW() * balloon.popAt) > 0.8 ? Math.sin(t / 25) * 0.03 : 0);
+    drawBalloon(bottom.x + dir.x * balloon.r * 0.9, bottom.y + dir.y * balloon.r * 0.9, balloon.r, balloon.design,
+      Math.atan2(dir.y, dir.x) - Math.PI / 2, wob);
+  }
+  drawStraw();
+
+  // 손 위치 표시: 집으면 작은 흰 점, 벌리면 빈 동그라미 (딱지 불기와 같은 표시)
+  if (hand) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 4;
+    ctx.beginPath(); ctx.arc(hand.pinch.x, hand.pinch.y, hand.pinching ? 9 : 16, 0, Math.PI * 2);
+    if (hand.pinching) { ctx.fillStyle = '#ffffff'; ctx.fill(); }
+    else { ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5; ctx.stroke(); }
+    ctx.restore();
+  }
+
+  // 터진 풍선 조각
+  particles.forEach(p => {
+    ctx.save(); ctx.globalAlpha = Math.max(p.life, 0);
+    ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+    ctx.fillStyle = p.color; ctx.fillRect(-p.w / 2, -p.w / 4, p.w, p.w / 2);
+    ctx.restore();
+  });
+}
+
+function stepEffects() {
+  floating.forEach(b => { b.x += b.vx + Math.sin(b.t) * 0.4; b.y += b.vy; b.t += 0.03; });
+  floating = floating.filter(b => b.y + b.r > -50);
+  particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.25; p.vx *= 0.97; p.rot += p.vr; p.life -= 0.02; });
+  particles = particles.filter(p => p.life > 0);
+}
+
+/* ───── 소리 ───── */
+let ac = null;
+function playPop() {
+  if (!ac) return;
+  const len = 0.15, buf = ac.createBuffer(1, ac.sampleRate * len, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
+  const src = ac.createBufferSource(); src.buffer = buf;
+  const g = ac.createGain(); g.gain.value = 0.8;
+  src.connect(g).connect(ac.destination); src.start();
+}
+function playTone(freq, dur) {
+  if (!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.frequency.value = freq; g.gain.setValueAtTime(0.15, ac.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur * 4);
+  o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime + dur * 4);
+}
+
+/* ───── 마이크 입김 감지 (딱지 불기와 같은 방식) ───── */
+let analyser = null, timeBuf, freqBuf, level = 0, spaceDown = false;
+function readBlow() {
+  if (!analyser) return 0;
+  analyser.getFloatTimeDomainData(timeBuf);
+  let sum = 0;
+  for (let i = 0; i < timeBuf.length; i++) sum += timeBuf[i] * timeBuf[i];
+  const rms = Math.sqrt(sum / timeBuf.length);
+  analyser.getByteFrequencyData(freqBuf);
+  const binHz = ac.sampleRate / analyser.fftSize;
+  let low = 0, total = 0;
+  for (let i = 1; i < freqBuf.length; i++) {
+    const hz = i * binHz; if (hz > 8000) break;
+    total += freqBuf[i]; if (hz < 600) low += freqBuf[i];
+  }
+  const ratio = total ? low / total : 0;
+  const penalty = TUNE.lowOnly && ratio < 0.4 ? 0.35 : 1;
+  // 작은 소리도 잘 잡히도록 제곱근 곡선으로 키움
+  const boosted = Math.sqrt(rms * Number(sensEl.value) * TUNE.micBoost);
+  return Math.min(1, boosted * penalty);
+}
+window.addEventListener('keydown', e => {
+  if (e.code === 'KeyR' && !e.repeat && !e.metaKey && !e.ctrlKey) resetAll();   // R키: 처음부터 (발표 시연용)
+  if (e.code === 'Space' && e.target.tagName !== 'BUTTON') { spaceDown = true; e.preventDefault(); }
+});
+window.addEventListener('keyup', e => { if (e.code === 'Space') { spaceDown = false; e.preventDefault(); } });
+
+/* ───── 메인 루프 ───── */
+function loop(t) {
+  requestAnimationFrame(loop);
+  if (window.trackFrame) { try { window.trackFrame(); } catch (e) { console.error(e); } }
+  updateState();
+  const raw = Math.max(readBlow(), spaceDown ? 0.6 : 0);
+  level = Math.max(raw, level * 0.8);
+  ringLevel.style.strokeDashoffset = 176 * (1 - level);
+  stepBalloon(raw);
+  stepEffects();
+  draw(t);
+}
+
+const ERR_TEXT = {
+  NotAllowedError: '권한이 거부됐어요',
+  NotFoundError: '장치를 찾지 못했어요',
+  NotReadableError: '다른 앱이 쓰고 있거나 맥 시스템 설정에서 막혀 있어요',
+  NoMediaDevices: '이 화면에서는 카메라를 쓸 수 없어요 (크롬에서 직접 열어주세요)',
+};
+async function start() {
+  const startBtn = document.getElementById('start');
+  startBtn.disabled = true;
+  startBtn.textContent = '허용을 기다리는 중…';
+  errEl.textContent = '주소창 아래 권한 창에서 마이크를 MacBook 마이크로 고르고 [허용]을 눌러주세요.';
+  errEl.hidden = false;
+  ac = new (window.AudioContext || window.webkitAudioContext)();
+  ac.resume();
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw { name: 'NoMediaDevices' };
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: 1280, height: 720 },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    video.srcObject = new MediaStream(stream.getVideoTracks());
+    await video.play().catch(() => {});
+    if (stream.getAudioTracks().length) {
+      analyser = ac.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0.2;
+      ac.createMediaStreamSource(new MediaStream(stream.getAudioTracks())).connect(analyser);
+      timeBuf = new Float32Array(analyser.fftSize); freqBuf = new Uint8Array(analyser.frequencyBinCount);
+    }
+  } catch (e) {
+    errEl.innerHTML = '카메라나 마이크를 켜지 못했어요 (' + (ERR_TEXT[e.name] || e.name) + ').<br>일단 들어가면 스페이스바로 해볼 수 있어요.';
+    startBtn.disabled = false;
+    startBtn.textContent = '그래도 들어가기';
+    startBtn.removeEventListener('click', start);
+    startBtn.addEventListener('click', () => { document.getElementById('overlay').hidden = true; }, { once: true });
+    return;
+  }
+  document.getElementById('overlay').hidden = true;
+}
+
+document.getElementById('start').addEventListener('click', start);
+document.getElementById('reset').addEventListener('click', () => { resetAll(); document.getElementById('reset').blur(); });
+// 손 인식이 안 될 때: 빨대를 클릭하면 입에 붙고, 한 번 더 클릭하면 뗌
+canvas.addEventListener('click', e => {
+  const p = { x: e.clientX, y: e.clientY };
+  if (state === 'attached') { detach(); return; }
+  const { top, bottom } = strawEnds();
+  const mid = { x: (top.x + bottom.x) / 2, y: (top.y + bottom.y) / 2 };
+  if (face && dist(p, mid) < strawLen() * 0.6) {
+    state = 'attached'; mouseAttached = true; lastDir = { x: 0.45, y: 0.9 };
+  }
+});
+const tuneBtn = document.getElementById('tuneBtn');
+const tunePanel = document.getElementById('tunePanel');
+tuneBtn.addEventListener('click', () => {
+  tunePanel.hidden = !tunePanel.hidden;
+  tuneBtn.setAttribute('aria-expanded', String(!tunePanel.hidden));
+});
+
+resetAll();
+straw = { ...restPos(), angle: -0.5 };
+requestAnimationFrame(loop);
+</script>
+
+<script type="module">
+/* 손·얼굴 인식 (MediaPipe): 손은 엄지·검지로 빨대 집기, 얼굴은 입 위치 찾기 */
+import { FilesetResolver, HandLandmarker, FaceLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+
+let handLandmarker = null, faceLandmarker = null, visionFiles = null, delegate = 'GPU';
+let handLm = null, faceLm = null, lastVideoTime = -1, frameNo = 0, switching = false;
+const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+async function createModels(dg) {
+  handLandmarker = await HandLandmarker.createFromOptions(visionFiles, {
+    baseOptions: { modelAssetPath: HAND_MODEL, delegate: dg },
+    runningMode: 'VIDEO', numHands: 1,
+    minHandDetectionConfidence: 0.4, minHandPresenceConfidence: 0.4, minTrackingConfidence: 0.4,
+  });
+  faceLandmarker = await FaceLandmarker.createFromOptions(visionFiles, {
+    baseOptions: { modelAssetPath: FACE_MODEL, delegate: dg },
+    runningMode: 'VIDEO', numFaces: 1,
+  });
+  delegate = dg;
+}
+// 도중에 GPU 인식이 고장 나면 CPU로 다시 만듦
+async function fallbackToCPU() {
+  if (switching || delegate === 'CPU') return;
+  switching = true;
+  handLandmarker = null; faceLandmarker = null;
+  try { await createModels('CPU'); } catch (e) { console.error(e); }
+  switching = false;
+}
+
+// 카메라 화면 속 점(0~1)을 실제 화면 좌표로 (거울 모드 + 화면 꽉 채우기 반영)
+function toScreen(p) {
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+  const scale = Math.max(W / vw, H / vh);
+  const offX = (W - vw * scale) / 2, offY = (H - vh * scale) / 2;
+  return { x: W - (p.x * vw * scale + offX), y: p.y * vh * scale + offY };
+}
+
+function track() {
+  if (!handLandmarker || !faceLandmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const now = performance.now();
+  frameNo++;
+  try {
+    const h = handLandmarker.detectForVideo(video, now);
+    handLm = h.landmarks && h.landmarks[0] ? h.landmarks[0] : null;
+  } catch (e) { console.error(e); fallbackToCPU(); return; }
+  if (frameNo % 2 === 0 || !faceLm) {
+    try {
+      const f = faceLandmarker.detectForVideo(video, now + 0.1);
+      faceLm = f.faceLandmarks && f.faceLandmarks[0] ? f.faceLandmarks[0] : null;
+    } catch (e) { console.error(e); fallbackToCPU(); }
+  }
+}
+
+// 매 프레임 메인 루프가 불러서 face, hand를 채움
+window.trackFrame = () => {
+  track();
+  face = null; hand = null;
+  if (faceLm) {
+    const up = toScreen(faceLm[13]), lo = toScreen(faceLm[14]);     // 윗입술·아랫입술 안쪽
+    const l = toScreen(faceLm[234]), r = toScreen(faceLm[454]);     // 얼굴 양쪽 끝
+    face = { mouth: { x: (up.x + lo.x) / 2, y: (up.y + lo.y) / 2 }, width: dist(l, r) };
+  }
+  if (handLm) {
+    const t = toScreen(handLm[4]), i = toScreen(handLm[8]);         // 엄지 끝, 검지 끝
+    const w = toScreen(handLm[0]), m = toScreen(handLm[9]);         // 손목, 가운데손가락 뿌리
+    const ratio = dist(t, i) / (dist(w, m) || 1);
+    const wasPinching = state !== 'idle' && !mouseAttached;
+    hand = { pinch: { x: (t.x + i.x) / 2, y: (t.y + i.y) / 2 }, pinching: ratio < (wasPinching ? TUNE.releaseRatio : TUNE.pinchRatio) };
+  }
+};
+
+try {
+  visionFiles = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+  try { await createModels('GPU'); }
+  catch (e) { console.warn('GPU 실패, CPU로 다시 시도', e); await createModels('CPU'); }
+} catch (e) {
+  console.warn('손·얼굴 인식을 불러오지 못했어요. 빨대 클릭으로 대신할 수 있어요.', e);
+}
+</script>
+<script>
+/* 놀이 화면 테두리
+   - 홈에서 열면(?shell=1): 홈과 똑같은 아이보리 모니터 + 파란 창 + 작업표시줄을 그리고, 놀이 화면을 그 창 안에 쏙 맞춰 넣음
+   - 파일을 바로 열면: 화면 가장자리에 파란 창 테두리만
+   - 창 오른쪽 위 ✕(닫기) → 홈으로. 마우스 클릭 / ESC / 검지 끝으로 ✕를 1초 가리키기
+   - 웹캠 화면에는 홈처럼 은은한 모니터 도트를 얹음 */
+(function () {
+  const NAMES = { 'ddakji-blow': '딱지 불기', 'balloon-blow': '고무풍선', 'slime-bottle': '액체괴물', 'sticky-hand': '찐득이',
+    'water-gun': '물총', 'dalgona': '달고나', 'heart-crystal': '하트 크리스탈' };
+  const HOLD_MS = 1000;
+  const here = (location.pathname.split('/').pop() || '').replace(/\.html$/, '');
+  const shell = new URLSearchParams(location.search).has('shell');
+  const goHome = () => {
+    if (goHome.done) return; goHome.done = true;
+    if (!shell) { document.body.style.transition = 'opacity 250ms ease'; document.body.style.opacity = '0'; }
+    setTimeout(() => { location.href = 'index.html?from=' + encodeURIComponent(here); }, shell ? 0 : 260);
+  };
+
+  const css = document.createElement('style');
+  css.textContent = `
+    .xpf-bar { position: fixed; z-index: 1001; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; box-sizing: border-box;
+      background: linear-gradient(180deg, #0997ff 0%, #0053ee 9%, #0050ee 45%, #0066ff 88%, #0053ee 100%); border-radius: 8px 8px 0 0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.35); font: 400 14px/1 "Jua", "Tahoma", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; color: #fff;
+      text-shadow: 1px 1px 1px rgba(0,0,0,.5); user-select: none; }
+    .xpf-ico { width: 16px; height: 16px; flex: none; border-radius: 3px; background: linear-gradient(135deg, #fff, #cfe3ff); box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+    .xpf-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .xpf-btn { position: relative; width: 22px; height: 22px; flex: none; border-radius: 3px; border: 1px solid #fff; padding: 0; cursor: pointer; overflow: hidden;
+      background: linear-gradient(180deg, #4a8cff, #1f5fe0); box-shadow: inset 0 0 1px rgba(0,0,0,.4); display: grid; place-items: center; }
+    .xpf-btn:hover { filter: brightness(1.15); }
+    .xpf-btn:focus-visible { outline: 2px dotted #fff; outline-offset: 2px; }
+    .xpf-btn svg { width: 12px; height: 12px; position: relative; }
+    .xpf-x { background: linear-gradient(180deg, #e98a6c, #d24b26 55%, #c03b1a); }
+    .xpf-x.hot { filter: brightness(1.25); transform: scale(1.12); }
+    .xpf-fill { position: absolute; left: 0; bottom: 0; width: 100%; height: 0%; background: rgba(255,255,255,.55); }
+    .xpf-side { position: fixed; z-index: 1001; pointer-events: none; background: #0831d9; }
+    .xpf-dots { position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(circle, transparent 40%, rgba(0,0,0,.3) 85%) 0 0 / 3px 3px,
+                  repeating-linear-gradient(0deg, rgba(0,0,0,.05) 0 1px, transparent 1px 3px); }
+    .xpf-rgb { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: screen;
+      background: repeating-linear-gradient(90deg, rgba(255,60,60,.05) 0 1px, rgba(60,255,90,.05) 1px 2px, rgba(70,110,255,.05) 2px 3px); }
+    /* 모니터 (홈과 같은 치수) */
+    .xpf-monitor { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; z-index: 1000; pointer-events: none; }
+    .xpf-glass { position: fixed; z-index: 1000; pointer-events: none; border-radius: 3.6vmin / 4.2vmin;
+      box-shadow: inset 0 0 7vmin 1vmin rgba(0,0,0,.6), inset 0 0 1.5vmin rgba(0,0,0,.5);
+      background: radial-gradient(ellipse 70% 45% at 28% 12%, rgba(255,255,255,.1), transparent 60%); }
+    .xpf-led { position: fixed; right: 5vmin; bottom: 3vmin; width: 0.9vmin; height: 0.9vmin; min-width: 6px; min-height: 6px; border-radius: 50%; z-index: 1002;
+      background: #62e36b; box-shadow: 0 0 6px #62e36b, 0 0 14px rgba(98,227,107,.5); pointer-events: none; }
+    .xpf-task { position: fixed; z-index: 1001; display: flex; align-items: stretch; overflow: hidden; font-family: "Gowun Dodum", "Tahoma", sans-serif;
+      background: linear-gradient(180deg, #3d8af7 0%, #245edb 9%, #2257d5 50%, #1f4fc0 90%, #1941a5 100%); box-shadow: 0 -1px 0 #0c3db6; }
+    .xpf-start { display: flex; align-items: center; padding: 0 1.4em 0 1em; border-radius: 0 12px 12px 0; color: #fff; font-family: "Jua", sans-serif; font-style: italic; cursor: pointer;
+      background: linear-gradient(180deg, #5eb75e 0%, #3c9a3c 12%, #3a993a 70%, #2f7f2f 100%); box-shadow: inset -1px 0 2px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.35); text-shadow: 1px 1px 1px rgba(0,0,0,.5); }
+    .xpf-tasks { flex: 1; display: flex; align-items: center; padding: 0 8px; }
+    .xpf-tb { height: 76%; display: flex; align-items: center; padding: 0 14px; border-radius: 3px; color: #fff; background: linear-gradient(180deg, #1e52b7, #1c49a8); box-shadow: inset 0 0 0 1px rgba(0,0,0,.35), inset 1px 1px 2px rgba(0,0,0,.35); white-space: nowrap; }
+    .xpf-tray { display: flex; align-items: center; padding: 0 14px 0 12px; color: #fff;
+      background: linear-gradient(180deg, #19b9f3 0%, #0f8fe0 10%, #0f8bdc 85%, #0c6fbf 100%); box-shadow: inset 1px 0 0 #0b5ea8, inset 2px 0 0 rgba(255,255,255,.25); }
+  `;
+  document.head.appendChild(css);
+  const cam = document.getElementById('cam');
+  if (cam) for (const k of ['xpf-dots', 'xpf-rgb']) { const d = document.createElement('div'); d.className = k; cam.after(d); }
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') goHome(); });
+
+  const BTNS = `<button class="xpf-btn" type="button" data-act="min" aria-label="닫고 홈으로"><svg viewBox="0 0 12 12"><rect x="2" y="8" width="6" height="2.4" fill="#fff"/></svg></button>
+    <button class="xpf-btn" type="button" data-act="max" aria-label="전체 화면"><svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" fill="none" stroke="#fff" stroke-width="1.6"/><rect x="1.5" y="1.5" width="9" height="2.4" fill="#fff"/></svg></button>
+    <button class="xpf-btn xpf-x" type="button" data-act="close" aria-label="닫고 홈으로"><span class="xpf-fill"></span><svg viewBox="0 0 12 12"><path d="M2.5 2.5 L9.5 9.5 M9.5 2.5 L2.5 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg></button>`;
+  const bar = document.createElement('div');
+  bar.className = 'xpf-bar';
+  bar.innerHTML = `<span class="xpf-ico"></span><span class="xpf-title">${NAMES[here] || document.title}</span>${BTNS}`;
+  document.body.appendChild(bar);
+  const sides = ['l', 'r', 'b'].map(() => { const d = document.createElement('div'); d.className = 'xpf-side'; document.body.appendChild(d); return d; });
+  bar.addEventListener('click', e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    if (b.dataset.act === 'max') {
+      if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen().catch(() => {});
+      b.blur();
+    } else goHome();
+  });
+
+  // ───── 모니터 모드: 놀이 화면(#stage)을 창 안 크기로 줄여서 넣음 ─────
+  let mon = null, glass = null, task = null, map = { s: 1, tx: 0, ty: 0 };
+  const stage = document.getElementById('stage');
+  if (shell) {
+    mon = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); mon.setAttribute('class', 'xpf-monitor'); document.body.appendChild(mon);
+    glass = document.createElement('div'); glass.className = 'xpf-glass'; document.body.appendChild(glass);
+    const led = document.createElement('div'); led.className = 'xpf-led'; document.body.appendChild(led);
+    task = document.createElement('div'); task.className = 'xpf-task';
+    task.innerHTML = `<div class="xpf-start">시작</div><div class="xpf-tasks"><div class="xpf-tb">${NAMES[here] || ''}</div></div><div class="xpf-tray"><span class="xpf-clock"></span></div>`;
+    document.body.appendChild(task);
+    task.querySelector('.xpf-start').addEventListener('click', goHome);
+    const clock = () => { const d = new Date(); task.querySelector('.xpf-clock').textContent = (d.getHours() < 12 ? '오전 ' : '오후 ') + ((d.getHours() + 11) % 12 + 1) + ':' + String(d.getMinutes()).padStart(2, '0'); };
+    clock(); setInterval(clock, 10000);
+    document.documentElement.style.background = '#e9e1cd';
+  }
+  const place = (el, x, y, w, h) => Object.assign(el.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+  const realW = () => document.documentElement.clientWidth, realH = () => document.documentElement.clientHeight;
+  let body = null;
+  function layout() {
+    const W = realW(), H = realH();
+    if (!shell) {
+      place(bar, 0, 0, W, 30);
+      place(sides[0], 0, 30, 4, H - 30); place(sides[1], W - 4, 30, 4, H - 30); place(sides[2], 0, H - 4, W, 4);
+      return;
+    }
+    // 홈 index.html과 같은 숫자: 테두리 3.2vmin, 아래 7.5vmin, 안쪽 홈 1.3vmin, 작업표시줄 clamp(30px, 4.6vmin, 44px)
+    const vm = Math.min(W, H) / 100, pad = 3.2 * vm, padB = 7.5 * vm, rec = 1.3 * vm;
+    const sx = pad + rec, sy = pad + rec, sw = W - 2 * (pad + rec), sh = H - pad - padB - 2 * rec;
+    const rx = 3.6 * vm, ry = 4.2 * vm, barH = Math.max(30, Math.min(44, 4.6 * vm));
+    // 아이보리 테두리 (가운데 화면 자리만 뚫림)
+    const rr = (x, y, w, h, a, b) => `M${x + a},${y} H${x + w - a} A${a},${b} 0 0 1 ${x + w},${y + b} V${y + h - b} A${a},${b} 0 0 1 ${x + w - a},${y + h} H${x + a} A${a},${b} 0 0 1 ${x},${y + h - b} V${y + b} A${a},${b} 0 0 1 ${x + a},${y} Z`;
+    mon.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    mon.innerHTML = `<defs><radialGradient id="xpfIv" cx="50%" cy="0%" r="100%"><stop offset="0" stop-color="#f8f3e6"/><stop offset=".55" stop-color="#ece4cf"/><stop offset="1" stop-color="#ddd2b8"/></radialGradient>
+      <linearGradient id="xpfRec" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cfc4a8"/><stop offset="1" stop-color="#e2d8bf"/></linearGradient></defs>
+      <path fill="url(#xpfIv)" fill-rule="evenodd" d="M0,0 H${W} V${H} H0 Z ${rr(pad, pad, W - 2 * pad, H - pad - padB, 2.4 * vm, 2.4 * vm)}"/>
+      <path fill="url(#xpfRec)" fill-rule="evenodd" d="${rr(pad, pad, W - 2 * pad, H - pad - padB, 2.4 * vm, 2.4 * vm)} ${rr(sx, sy, sw, sh, rx, ry)}"/>`;
+    place(glass, sx, sy, sw, sh);
+    // 창(제목줄 + 파란 테두리 3px)과 작업표시줄
+    place(bar, sx, sy, sw, 29);
+    place(task, sx, sy + sh - barH, sw, barH);
+    task.style.fontSize = (barH * 0.36) + 'px'; task.querySelector('.xpf-start').style.fontSize = (barH * 0.5) + 'px';
+    task.style.borderRadius = `0 0 ${rx}px ${rx}px / 0 0 ${ry}px ${ry}px`;
+    bar.style.borderRadius = `${rx}px ${rx}px 0 0 / ${ry}px ${ry}px 0 0`; bar.style.paddingLeft = (rx * 0.6 + 8) + 'px'; bar.style.paddingRight = (rx * 0.5 + 4) + 'px';
+    const by = sy + 29, bh = sh - barH - 29 - 3, bx = sx + 3, bw = sw - 6;
+    place(sides[0], sx, by, 3, bh + 3); place(sides[1], sx + sw - 3, by, 3, bh + 3); place(sides[2], sx, by + bh, sw, 3);
+    // 놀이 화면을 창 안 자리에 그대로 넣음: 놀이 쪽에는 '화면 크기 = 창 안 크기'라고 알려줘서 잘리거나 찌그러지지 않게
+    map = { s: 1, tx: bx, ty: by };
+    body = { w: Math.round(bw), h: Math.round(bh) };
+    if (stage) Object.assign(stage.style, { inset: 'auto', left: bx + 'px', top: by + 'px', width: body.w + 'px', height: body.h + 'px', overflow: 'hidden' });
+  }
+  if (shell) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, get: () => body ? body.w : realW() });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => body ? body.h : realH() });
+  }
+  let relaying = false;
+  function relayout() {
+    if (relaying) return; relaying = true;
+    layout();
+    if (shell) window.dispatchEvent(new Event('resize'));   // 놀이가 새 크기로 다시 그리게
+    relaying = false;
+  }
+  relayout(); addEventListener('resize', relayout);
+
+  // 마우스 좌표도 줄인 화면에 맞게 바꿔줌 (놀이 화면 안 캔버스 클릭이 제자리를 가리키도록)
+  if (shell && stage) {
+    for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+      stage.addEventListener(type, e => {
+        if (e.__xpf || !(e.target instanceof HTMLCanvasElement)) return;
+        e.stopImmediatePropagation();
+        const ev = new PointerEvent(type, { bubbles: true, cancelable: true, clientX: (e.clientX - map.tx) / map.s, clientY: (e.clientY - map.ty) / map.s, button: e.button, buttons: e.buttons, pointerId: e.pointerId });
+        ev.__xpf = true; e.target.dispatchEvent(ev);
+      }, true);
+    }
+  }
+
+  // 손으로: 놀이마다 손 정보 모양이 달라서 검지 끝 위치를 찾아봄 (놀이 화면 좌표 → 실제 화면 좌표)
+  function fingerTip() {
+    const hds = window.handData || [];
+    let p = null;
+    for (const hd of hds) {
+      if (!hd) continue;
+      if (hd.s && hd.s[8]) { p = hd.s[8]; break; }
+      if (hd.index) { p = hd.index; break; }
+      if (hd.tips && hd.tips[0]) { p = hd.tips[0]; break; }
+      if (hd.anchor) { p = hd.anchor; break; }
+    }
+    if (!p) try { if (typeof hand !== 'undefined' && hand && hand.pinch) p = hand.pinch; } catch (e) {}
+    return p && { x: p.x * map.s + map.tx, y: p.y * map.s + map.ty };
+  }
+  const xBtn = bar.querySelector('.xpf-x'), fill = bar.querySelector('.xpf-fill');
+  let since = 0;
+  function tick(t) {
+    requestAnimationFrame(tick);
+    const p = fingerTip(), r = xBtn.getBoundingClientRect();
+    const on = p && Math.abs(p.x - (r.left + r.width / 2)) < 60 && p.y - (r.top + r.height / 2) < 80 && p.y > r.top - 60;   // ✕ 근처(넉넉하게)
+    if (on) { if (!since) since = t; } else since = 0;
+    const k = since ? Math.min(1, (t - since) / HOLD_MS) : 0;
+    fill.style.height = (k * 100) + '%';
+    xBtn.classList.toggle('hot', !!on);
+    if (k >= 1) goHome();
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

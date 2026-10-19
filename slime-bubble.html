@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>슬라임 바풍</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Gowun+Dodum&display=swap">
+<style>
+  /* 레이아웃: 웹캠 전체 화면 + 책상 위 슬라임 한 덩이. 글자·패널 없이 아래 동그라미 버튼 하나만 (고무풍선과 같은 틀) */
+  :root {
+    --ink: #2b2118;
+    --white: #ffffff;
+    --accent: #9be7d8;
+    --display: "Jua", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    --body: "Gowun Dodum", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; background: #14110e; color: var(--white); font-family: var(--body); overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); background: #14110e; }
+  #fx { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 50%; }
+
+  /* 아래 가운데 동그라미: 당긴 만큼 테두리가 차오름(꽉 차면 터짐), 누르면 새 슬라임 */
+  .ring { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); width: 64px; height: 64px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.35)); }
+  .ring-gauge { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring-icon { position: absolute; left: 50%; top: 50%; width: 24px; height: 24px; transform: translate(-50%, -50%); transition: transform 300ms ease; }
+  .ring:hover .ring-icon, .ring:active .ring-icon { transform: translate(-50%, -50%) rotate(-180deg); }
+  .ring circle { fill: none; }
+  .ring-track { stroke: var(--white); stroke-width: 3; }
+  .ring-level { stroke: var(--accent); stroke-width: 5; stroke-linecap: round; stroke-dasharray: 176; stroke-dashoffset: 176; transition: stroke-dashoffset 60ms linear; }
+
+  .overlay { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.55); padding: 16px; text-align: center; }
+  .intro { display: grid; gap: 16px; justify-items: center; max-width: 380px; }
+  .intro h1 { font-family: var(--display); font-weight: 400; font-size: 40px; margin: 0; }
+  .intro p { margin: 0; line-height: 1.6; font-size: 16px; }
+  .start { font-family: var(--display); font-size: 18px; color: var(--ink); background: var(--white); padding: 12px 24px; border-radius: 999px; }
+  .start:focus-visible { border-radius: 999px; }
+  .intro small { font-size: 13px; line-height: 1.5; opacity: .8; }
+  .err { color: var(--white); font-size: 14px; line-height: 1.5; }
+  @media (prefers-reduced-motion: reduce) { .ring-icon { transition: none; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="fx"></canvas>
+
+  <button class="ring" id="reset" type="button" aria-label="새 슬라임으로 다시">
+    <svg class="ring-gauge" viewBox="0 0 64 64" aria-hidden="true">
+      <circle class="ring-track" cx="32" cy="32" r="28"/>
+      <circle class="ring-level" id="ringLevel" cx="32" cy="32" r="28"/>
+    </svg>
+    <svg class="ring-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M19.5 3.5v5h-5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+
+  <div class="overlay" id="overlay">
+    <div class="intro">
+      <h1>슬라임 바풍</h1>
+      <p>손가락으로 슬라임을 <b>꾹꾹</b> 눌러보세요.<br>슬라임 <b>양쪽 끝</b>을 꽉 집거나 주먹 쥐어 잡고 쭉 펴서<br><b>들어 올리면</b> 바풍이 부풀어요. 손을 놓고 누르면 <b>뽁!</b></p>
+      <button class="start" id="start" type="button">카메라 켜고 시작</button>
+      <small>손이 화면 아래쪽에 잘리지 않게, 손목까지 보이도록 해주세요.<br>손 인식이 안 되면 마우스로: 슬라임 위에서 끌면 누르기,<br>슬라임 옆에서 잡고 옆·위로 끌면 바풍. 새 슬라임은 R키.</small>
+      <div class="err" id="err" hidden></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const video = document.getElementById('cam');
+const canvas = document.getElementById('fx');
+const ctx = canvas.getContext('2d');
+const ringLevel = document.getElementById('ringLevel');
+const errEl = document.getElementById('err');
+
+/* ───── 손으로 조절하기 쉬운 값들 ───── */
+const TUNE = {
+  width: 0.32,         // 슬라임 가로 (화면 폭 기준)
+  height: 0.2,         // 슬라임 높이 (화면 높이 기준)
+  floor: 0.78,         // 책상 높이 (화면 높이 기준). 손이 화면에 잘 보이도록 조금 위에 둠
+  fingerSize: 26,      // 누르는 손가락 끝 크기(px, 반지름)
+  springBack: 0.012,   // 눌린 자국이 원래 모양으로 돌아오는 힘
+  grabRange: 90,       // 슬라임에서 이 거리(px) 안에서 잡아야 잡힘
+  pinchOn: 0.38,       // 엄지·검지가 손 크기의 이 비율보다 가까우면 '잡기' (꾹꾹 누르기와 헷갈리지 않게 꽉 집어야 함)
+  pinchOff: 0.6,       // 잡은 뒤에는 이 비율보다 벌려야 놓은 걸로 봄
+  gripHold: 6,         // 이 프레임 동안 계속 잡고 있어야 '잡기'로 인정 (스치듯 잡히는 것 방지)
+  domeLife: 5,         // 완성된 바풍이 저절로 꺼질 때까지 시간(초)
+  domeMax: 0.5,        // 바풍 최대 높이 (화면 높이 기준). 여기서 멈추고, 그보다 훨씬 더 당기면 펑
+  smooth: 0.5,         // 손 떨림 줄이기 (0~1)
+};
+
+const COLORS = ['#f7a8d8', '#9be7d8', '#c7a6ff', '#ffe08a', '#9cc9ff'];
+let colorIndex = 0, slimeColor = COLORS[0], RGB = [0, 0, 0];
+const hexRGB = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const rgba = a => `rgba(${RGB[0]},${RGB[1]},${RGB[2]},${a})`;
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+let W = 0, H = 0, dpr = 1, floorY = 0;
+/* 상태: blob(덩어리) → sheet(잡고 펴는 중, 바풍 부푸는 중) → dome(바풍 완성) → 누르면 펑 → blob */
+let mode = 'blob';
+const N = 84;
+let pts = [], rest = [], restLen = [], area0 = 0;
+let sheet = null, dome = null, shards = [], sparkles = [], reform = 0;
+let hands = {}, mouse = null;
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  resetAll(colorIndex);
+}
+window.addEventListener('resize', resize);
+
+function resetAll(ci) {
+  colorIndex = ci === undefined ? (colorIndex + 1) % COLORS.length : ci;
+  slimeColor = COLORS[colorIndex]; RGB = hexRGB(slimeColor);
+  ringLevel.style.stroke = slimeColor;
+  floorY = H * TUNE.floor;
+  makeBlob(W / 2);
+  sparkles = Array.from({ length: 28 }, () => ({ x: (Math.random() - 0.5) * W * TUNE.width * 0.8, y: -Math.random() * H * TUNE.height * 0.8, r: 0.8 + Math.random() * 1.6, t: Math.random() * 6 }));
+  mode = 'blob'; sheet = null; dome = null; shards = []; hands = {};
+}
+function makeBlob(cx) {
+  const rx = W * TUNE.width / 2, ry = H * TUNE.height, cy = floorY - ry * 0.55;
+  pts = [];
+  for (let i = 0; i < N; i++) {
+    const t = Math.PI + (i / N) * Math.PI * 2;
+    pts.push({ x: cx + Math.cos(t) * rx, y: Math.min(floorY, cy + Math.sin(t) * ry), vx: 0, vy: 0 });
+  }
+  const c = centroid();
+  rest = pts.map(p => ({ x: p.x - c.x, y: p.y - c.y }));
+  restLen = pts.map((p, i) => dist(p, pts[(i + 1) % N]));
+  area0 = polyArea(pts);
+}
+
+function centroid() { let x = 0, y = 0; for (const p of pts) { x += p.x; y += p.y; } return { x: x / N, y: y / N }; }
+function polyArea(ps) { let a = 0; for (let i = 0, j = ps.length - 1; i < ps.length; j = i++) a += (ps[j].x + ps[i].x) * (ps[j].y - ps[i].y); return Math.abs(a / 2); }
+function blobBox() { let x0 = Infinity, x1 = -Infinity, y0 = Infinity; for (const p of pts) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); } return { x0, x1, y0 }; }
+function nearSlime(p) {
+  const b = blobBox();
+  return p.x > b.x0 - TUNE.grabRange && p.x < b.x1 + TUNE.grabRange && p.y > b.y0 - TUNE.grabRange && p.y < floorY + 40;
+}
+
+/* ───── 덩어리 상태: 말랑하게 눌림 ───── */
+function blobPhysics(pressers) {
+  for (let sub = 0; sub < 3; sub++) {
+    const c = centroid(), deficit = (area0 - polyArea(pts)) / area0;
+    for (let i = 0; i < N; i++) {
+      const p = pts[i];
+      p.vx += (c.x + rest[i].x - p.x) * TUNE.springBack;
+      p.vy += (c.y + rest[i].y - p.y) * TUNE.springBack;
+      const dx = p.x - c.x, dy = p.y - c.y, d = Math.hypot(dx, dy) || 1;
+      p.vx += dx / d * deficit * 2.2; p.vy += dy / d * deficit * 2.2;
+      p.vy += 0.12;
+    }
+    for (let i = 0; i < N; i++) {
+      const a = pts[i], b = pts[(i + 1) % N];
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, f = (d - restLen[i]) * 0.22 / d;
+      a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+    }
+    for (const p of pts) {
+      p.vx *= 0.86; p.vy *= 0.86; p.x += p.vx / 3; p.y += p.vy / 3;
+      if (p.y > floorY) { p.y = floorY; p.vy = 0; p.vx *= 0.6; }
+    }
+    for (const f of pressers) {
+      const R = TUNE.fingerSize;
+      for (const p of pts) {
+        const dx = p.x - f.x, dy = p.y - f.y, d = Math.hypot(dx, dy);
+        if (d < R && d > 0.01) { p.x = f.x + dx * R / d; p.y = Math.min(floorY, f.y + dy * R / d); p.vx *= 0.3; p.vy *= 0.3; f.touching = true; }
+      }
+    }
+  }
+}
+
+/* ───── 펴고 들어 올리기: 잡은 손 사이로 슬라임이 얇게 펴지고, 들어 올린 만큼 아래에 공기가 들어가 바풍이 됨 ───── */
+function startSheet(holders) {
+  const b = blobBox();
+  sheet = { x0: b.x0, x1: b.x1, anchorL: b.x0, anchorR: b.x1, w0: b.x1 - b.x0, domeH: 0, ends: {} };
+  mode = 'sheet';
+  playSquish();
+}
+function updateSheet(holders) {
+  const hs = Object.values(holders);
+  if (!hs.length) {
+    // 손을 놓으면: 충분히 부풀었으면 바풍 완성, 아니면 다시 덩어리로
+    if (sheet.domeH > H * 0.08) { dome = { x0: sheet.x0, x1: sheet.x1, h: sheet.domeH, h0: sheet.domeH, t: 0, age: 0 }; mode = 'dome'; playBloop(); }
+    else { makeBlob((sheet.x0 + sheet.x1) / 2); mode = 'blob'; reform = 1; }
+    sheet = null; return;
+  }
+  // 잡은 손이 하나면 반대쪽 끝은 그 자리에 붙어 있음
+  let xs = hs.map(h => h.x);
+  if (hs.length === 1) xs.push(hs[0].x < (sheet.anchorL + sheet.anchorR) / 2 ? sheet.anchorR : sheet.anchorL);
+  const tx0 = Math.min(...xs), tx1 = Math.max(...xs);
+  sheet.x0 += (tx0 - sheet.x0) * 0.4; sheet.x1 += (tx1 - sheet.x1) * 0.4;
+  if (sheet.x1 - sheet.x0 < sheet.w0 * 0.6) { const c = (sheet.x0 + sheet.x1) / 2; sheet.x0 = c - sheet.w0 * 0.3; sheet.x1 = c + sheet.w0 * 0.3; }
+  sheet.hands = hs;
+  // 잡은 자리에서 들어 올린 만큼 + 넓게 편 만큼 공기가 들어감. 최대 크기에서 멈춤
+  const lift = Math.max(0, ...hs.map(h => h.baseY - h.y));
+  const spread = Math.max(0, (sheet.x1 - sheet.x0) - sheet.w0);
+  const want = lift * 1.4 + spread * 0.3, maxH = H * TUNE.domeMax;
+  const target = Math.min(maxH, want);
+  sheet.domeH += target > sheet.domeH ? (target - sheet.domeH) * 0.1 : (target - sheet.domeH) * 0.02;
+  sheet.over = want / maxH;
+  // 최대 크기를 넘어서 한참 더 당겨야 펑 (최대의 1.6배)
+  if (want > maxH * 1.6) {
+    popDome((sheet.x0 + sheet.x1) / 2, sheet.x0, sheet.x1, sheet.domeH);
+    sheet = null; mode = 'blob'; makeBlob(W / 2); reform = 1;
+  }
+}
+function popDome(cx, x0, x1, h) {
+  for (let k = 0; k < 70; k++) {
+    const t = Math.PI + Math.random() * Math.PI;
+    const rx = (x1 - x0) / 2;
+    shards.push({ x: cx + Math.cos(t) * rx, y: floorY + Math.sin(t) * h, vx: (Math.random() - 0.5) * 6, vy: -Math.random() * 4, life: 1, w: 6 + Math.random() * 18, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.3 });
+  }
+  playPop();
+}
+
+/* ───── 손 처리 ───── */
+function readHands() {
+  if (window.trackFrame) { try { window.trackFrame(); } catch (e) { console.error(e); } }
+  const incoming = mouse ? [mouse] : (window.handData || []);
+  const seen = {};
+  for (const hd of incoming) {
+    seen[hd.id] = true;
+    const prev = hands[hd.id];
+    const sm = (a, b) => prev && hd.id !== 'm' ? { x: a.x + (b.x - a.x) * TUNE.smooth, y: a.y + (b.y - a.y) * TUNE.smooth } : { x: b.x, y: b.y };
+    const tips = hd.tips.map((t, k) => sm(prev && prev.tips[k] ? prev.tips[k] : t, t));
+    const grip = sm(prev ? prev.grip : hd.grip, hd.grip);
+    const was = prev ? prev.gripping : false;
+    const gripping = hd.id === 'm' ? hd.grabMode : (hd.fist || hd.pinchRatio < (was ? TUNE.pinchOff : TUNE.pinchOn));
+    const gripFrames = gripping ? (prev ? prev.gripFrames : 0) + 1 : 0;
+    hands[hd.id] = { tips, grip, gripping, gripFrames, holding: prev ? prev.holding && gripping : false, baseY: prev ? prev.baseY : grip.y,
+      startedGrip: gripFrames === TUNE.gripHold };
+  }
+  for (const id in hands) if (!seen[id]) delete hands[id];
+}
+
+/* ───── 그리기 ───── */
+function smoothPath(ps) {
+  const path = new Path2D(), m = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const s0 = m(ps[ps.length - 1], ps[0]); path.moveTo(s0.x, s0.y);
+  for (let i = 0; i < ps.length; i++) { const p = ps[i], q = m(p, ps[(i + 1) % ps.length]); path.quadraticCurveTo(p.x, p.y, q.x, q.y); }
+  path.closePath(); return path;
+}
+function drawBlob(t) {
+  const path = smoothPath(pts), c = centroid(), b = blobBox();
+  const s = reform > 0 ? 1 - reform * 0.3 : 1;
+  ctx.save();
+  if (reform > 0) { ctx.translate(c.x, floorY); ctx.scale(1 + reform * 0.4, s); ctx.translate(-c.x, -floorY); }
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.25)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 6;
+  const g = ctx.createLinearGradient(0, b.y0, 0, floorY);
+  g.addColorStop(0, `rgba(${Math.min(255, RGB[0] + 35)},${Math.min(255, RGB[1] + 35)},${Math.min(255, RGB[2] + 35)},.92)`);
+  g.addColorStop(1, `rgba(${RGB[0] * 0.85 | 0},${RGB[1] * 0.85 | 0},${RGB[2] * 0.85 | 0},.95)`);
+  ctx.fillStyle = g; ctx.fill(path);
+  ctx.restore();
+  ctx.save(); ctx.clip(path);
+  for (const sp of sparkles) {
+    ctx.fillStyle = `rgba(255,255,255,${0.4 + 0.5 * Math.abs(Math.sin(t / 500 + sp.t))})`;
+    ctx.beginPath(); ctx.arc(c.x + sp.x, floorY + sp.y, sp.r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 6; ctx.stroke(path);
+  ctx.fillStyle = 'rgba(255,255,255,.35)';
+  ctx.beginPath(); ctx.ellipse(c.x - (b.x1 - b.x0) * 0.22, b.y0 + 24, (b.x1 - b.x0) * 0.2, 9, -0.15, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+/* 반투명한 바풍 막: 위쪽은 얇고 투명, 아래 가장자리는 두껍게 뭉친 슬라임 + 형광등 반사 */
+function drawDome(x0, x1, h, wob) {
+  const cx = (x0 + x1) / 2, rx = (x1 - x0) / 2 * 0.92, ry = h * (1 + wob);
+  if (ry < 3) return;
+  ctx.save();
+  const g = ctx.createRadialGradient(cx, floorY - ry * 0.4, ry * 0.1, cx, floorY, Math.max(rx, ry));
+  g.addColorStop(0, rgba(0.05)); g.addColorStop(0.75, rgba(0.12)); g.addColorStop(1, rgba(0.35));
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(cx, floorY, rx, ry, 0, Math.PI, Math.PI * 2); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = rgba(0.55); ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.ellipse(cx, floorY, rx, ry, 0, Math.PI, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = rgba(0.25); ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.ellipse(cx, floorY, rx * 0.985, ry * 0.97, 0, Math.PI * 1.03, Math.PI * 1.25); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(cx, floorY, rx * 0.985, ry * 0.97, 0, Math.PI * 1.75, Math.PI * 1.97); ctx.stroke();
+  // 형광등이 비친 하얀 줄무늬
+  ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineCap = 'round';
+  const streak = (ax, ay, len, ang, w) => { ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(cx + ax * rx, floorY - ay * ry); ctx.lineTo(cx + ax * rx + Math.cos(ang) * len * rx, floorY - ay * ry + Math.sin(ang) * len * rx); ctx.stroke(); };
+  streak(-0.42, 0.62, 0.12, -0.5, 4); streak(-0.2, 0.86, 0.1, -0.25, 4); streak(0.12, 0.9, 0.09, 0.15, 3); streak(0.38, 0.72, 0.08, 0.5, 3);
+  ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.ellipse(cx, floorY, rx * 0.86, ry * 0.86, 0, Math.PI * 1.12, Math.PI * 1.3); ctx.stroke();
+  ctx.restore();
+  // 책상 위에 넓게 펴진 가장자리 (두껍게 뭉친 분홍 띠)
+  ctx.save();
+  ctx.fillStyle = rgba(0.55);
+  ctx.beginPath(); ctx.ellipse(cx, floorY, rx * 1.08, 7, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = rgba(0.85); ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.ellipse(cx, floorY, rx * 1.02, 4, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+function drawSheet() {
+  const sw = sheet.x1 - sheet.x0, th = Math.max(3, Math.min(40, area0 / Math.max(sw, 1) * 0.5));
+  const alpha = Math.max(0.3, Math.min(0.9, th / 25));
+  if (sheet.domeH > 4) drawDome(sheet.x0, sheet.x1, sheet.domeH, 0);
+  else {
+    ctx.fillStyle = rgba(alpha);
+    ctx.beginPath(); ctx.moveTo(sheet.x0, floorY);
+    ctx.quadraticCurveTo((sheet.x0 + sheet.x1) / 2, floorY - th * 2, sheet.x1, floorY); ctx.closePath(); ctx.fill();
+  }
+  // 잡은 손에서 가장자리로 늘어진 슬라임 자락
+  for (const h of sheet.hands || []) {
+    const ex = h.x < (sheet.x0 + sheet.x1) / 2 ? sheet.x0 : sheet.x1;
+    const inward = ex === sheet.x0 ? 1 : -1;
+    ctx.fillStyle = rgba(0.45);
+    ctx.beginPath(); ctx.moveTo(h.x - 8, h.y); ctx.lineTo(h.x + 8, h.y);
+    ctx.lineTo(ex + inward * 40, floorY - Math.min(sheet.domeH * 0.3, 40)); ctx.lineTo(ex - inward * 10, floorY); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = rgba(0.85); ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(h.x, h.y); ctx.lineTo(ex, floorY); ctx.stroke();
+    ctx.fillStyle = rgba(0.9); ctx.beginPath(); ctx.arc(h.x, h.y, 10, 0, Math.PI * 2); ctx.fill();
+  }
+}
+function draw(t) {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,.16)';
+  ctx.fillRect(W * 0.06, floorY, W * 0.88, 10);
+  if (mode === 'blob') drawBlob(t);
+  if (mode === 'sheet') drawSheet();
+  if (mode === 'dome') { dome.t += 0.04; drawDome(dome.x0, dome.x1, dome.h, Math.sin(dome.t) * 0.015); }
+  for (const s of shards) {
+    ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(s.rot);
+    ctx.fillStyle = rgba(0.6 * s.life); ctx.fillRect(-s.w / 2, -2, s.w, 4);
+    ctx.restore();
+  }
+  // 손 표시: 잡는 중이면 채워진 큰 점, 아니면 손가락 끝 동그라미
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 4;
+  for (const id in hands) {
+    const h = hands[id];
+    if (h.gripping) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(h.grip.x, h.grip.y, 11, 0, Math.PI * 2); ctx.fill(); continue; }
+    for (const tp of h.tips) {
+      ctx.beginPath(); ctx.arc(tp.x, tp.y, TUNE.fingerSize * 0.5, 0, Math.PI * 2);
+      if (tp.touching) { ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.fill(); }
+      else { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.stroke(); }
+    }
+  }
+  ctx.restore();
+}
+
+/* ───── 소리 ───── */
+let ac = null;
+function playPop() {
+  if (!ac) return;
+  const now = ac.currentTime, o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine'; o.frequency.setValueAtTime(700, now); o.frequency.exponentialRampToValueAtTime(90, now + 0.12);
+  g.gain.setValueAtTime(0.6, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+  o.connect(g).connect(ac.destination); o.start(now); o.stop(now + 0.17);
+  const len = 0.08, buf = ac.createBuffer(1, Math.floor(ac.sampleRate * len), ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2);
+  const src = ac.createBufferSource(), ng = ac.createGain(); src.buffer = buf; ng.gain.value = 0.5;
+  src.connect(ng).connect(ac.destination); src.start(now);
+}
+function playBloop() {
+  if (!ac) return;
+  const now = ac.currentTime, o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine'; o.frequency.setValueAtTime(220, now); o.frequency.exponentialRampToValueAtTime(440, now + 0.15);
+  g.gain.setValueAtTime(0.18, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+  o.connect(g).connect(ac.destination); o.start(now); o.stop(now + 0.26);
+}
+let squishCool = 0;
+function playSquish() {
+  if (!ac || squishCool > 0) return;
+  squishCool = 12;
+  const len = 0.12, buf = ac.createBuffer(1, Math.floor(ac.sampleRate * len), ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / d.length);
+  const src = ac.createBufferSource(); src.buffer = buf;
+  const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500;
+  const g = ac.createGain(); g.gain.value = 0.5;
+  src.connect(f).connect(g).connect(ac.destination); src.start();
+}
+
+/* ───── 마우스 대체: 슬라임 위에서 끌면 누르기, 슬라임 옆(바깥)에서 잡고 끌면 바풍 ───── */
+function insideBlob(x, y) {
+  let r = false;
+  for (let i = 0, j = N - 1; i < N; j = i++) { const a = pts[i], b = pts[j]; if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) r = !r; }
+  return r;
+}
+canvas.addEventListener('pointerdown', e => {
+  const x = e.clientX, y = e.clientY;
+  const grabMode = mode === 'blob' && !insideBlob(x, y) && nearSlime({ x, y });
+  mouse = { id: 'm', tips: [{ x, y }], grip: { x, y }, grabMode };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e => { if (mouse) { mouse.tips = [{ x: e.clientX, y: e.clientY }]; mouse.grip = { x: e.clientX, y: e.clientY }; } });
+const mouseUp = () => { mouse = null; };
+canvas.addEventListener('pointerup', mouseUp);
+canvas.addEventListener('pointercancel', mouseUp);
+
+function loop(t) {
+  requestAnimationFrame(loop);
+  readHands();
+  const pressers = [];
+  for (const id in hands) { const h = hands[id]; if (!h.gripping) h.tips.forEach(tp => { tp.touching = false; pressers.push(tp); }); }
+
+  if (mode === 'blob') {
+    // 슬라임 근처에서 잡기 시작한 손이 있으면 펴기 시작
+    // 슬라임 양쪽 가장자리 근처를 잡아야 펴기 시작 (위를 꾹꾹 누를 땐 안 잡히게)
+    const bb = blobBox(), bw = bb.x1 - bb.x0;
+    for (const id in hands) {
+      const h = hands[id];
+      const atEdge = h.grip.x < bb.x0 + bw * 0.3 || h.grip.x > bb.x1 - bw * 0.3;
+      if (h.startedGrip && nearSlime(h.grip) && atEdge) { h.holding = true; h.baseY = h.grip.y; }
+    }
+    const holders = {};
+    for (const id in hands) if (hands[id].holding) holders[id] = { ...hands[id].grip, baseY: hands[id].baseY };
+    if (Object.keys(holders).length) startSheet(holders);
+    else { blobPhysics(pressers); if (pressers.some(f => f.touching)) playSquish(); }
+  } else if (mode === 'sheet') {
+    for (const id in hands) { const h = hands[id]; if (h.startedGrip && h.grip.x > sheet.x0 - TUNE.grabRange && h.grip.x < sheet.x1 + TUNE.grabRange) { h.holding = true; h.baseY = h.grip.y; } }
+    const holders = {};
+    for (const id in hands) if (hands[id].holding) holders[id] = { ...hands[id].grip, baseY: hands[id].baseY };
+    updateSheet(holders);
+  } else if (mode === 'dome') {
+    // 바풍을 손가락으로 누르면 뽁!
+    const cx = (dome.x0 + dome.x1) / 2, rx = (dome.x1 - dome.x0) / 2 * 0.92;
+    const hit = pressers.some(f => f.y < floorY && ((f.x - cx) / rx) ** 2 + ((f.y - floorY) / dome.h) ** 2 < 1.05);
+    if (hit) { popDome(cx, dome.x0, dome.x1, dome.h); makeBlob(cx); mode = 'blob'; reform = 1; dome = null; }
+    else {
+      // 가만히 두면 공기가 빠지면서 다시 퐁신한 슬라임으로 돌아옴
+      dome.age += 1 / 60;
+      if (dome.age > TUNE.domeLife) {
+        dome.h *= 0.94; dome.x0 += (cx - dome.x0) * 0.04; dome.x1 += (cx - dome.x1) * 0.04;
+        if (dome.h < 12) { makeBlob(cx); mode = 'blob'; reform = 1; dome = null; playSquish(); }
+      }
+    }
+  }
+  if (reform > 0) reform = Math.max(0, reform - 0.04);
+  if (squishCool > 0) squishCool--;
+  for (const s of shards) { s.x += s.vx; s.y += s.vy; s.vy += 0.25; s.rot += s.vr; s.life -= 0.02; if (s.y > floorY) { s.y = floorY; s.vy *= -0.2; s.vx *= 0.7; } }
+  shards = shards.filter(s => s.life > 0);
+  const level = mode === 'sheet' ? Math.min(1, (sheet.over || 0) / 1.6) : mode === 'dome' ? dome.h / (H * TUNE.domeMax) / 1.6 : 0;
+  ringLevel.style.strokeDashoffset = 176 * (1 - Math.min(1, level));
+  draw(t);
+}
+
+window.addEventListener('keydown', e => { if (e.code === 'KeyR' && !e.repeat && !e.metaKey && !e.ctrlKey) resetAll(); });
+
+const ERR_TEXT = {
+  NotAllowedError: '권한이 거부됐어요',
+  NotFoundError: '카메라를 찾지 못했어요',
+  NotReadableError: '다른 앱이 쓰고 있거나 맥 시스템 설정에서 막혀 있어요',
+  NoMediaDevices: '이 화면에서는 카메라를 쓸 수 없어요 (크롬에서 직접 열어주세요)',
+};
+async function start() {
+  const startBtn = document.getElementById('start');
+  startBtn.disabled = true;
+  startBtn.textContent = '허용을 기다리는 중…';
+  ac = new (window.AudioContext || window.webkitAudioContext)();
+  ac.resume();
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw { name: 'NoMediaDevices' };
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720 } });
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+  } catch (e) {
+    errEl.innerHTML = '카메라를 켜지 못했어요 (' + (ERR_TEXT[e.name] || e.name) + ').<br>일단 들어가면 마우스로 해볼 수 있어요.';
+    errEl.hidden = false;
+    startBtn.disabled = false;
+    startBtn.textContent = '그래도 들어가기';
+    startBtn.removeEventListener('click', start);
+    startBtn.addEventListener('click', () => { document.getElementById('overlay').hidden = true; }, { once: true });
+    return;
+  }
+  document.getElementById('overlay').hidden = true;
+}
+document.getElementById('start').addEventListener('click', start);
+document.getElementById('reset').addEventListener('click', () => { resetAll(); document.getElementById('reset').blur(); });
+
+resize();
+requestAnimationFrame(loop);
+</script>
+
+<script type="module">
+/* 손 인식 (MediaPipe): 양손의 검지·중지·약지 끝 + 집기·주먹 쥐기 */
+import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+
+let handLandmarker = null, visionFiles = null, delegate = 'GPU', lastVideoTime = -1, switching = false;
+const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+async function createModel(dg) {
+  handLandmarker = await HandLandmarker.createFromOptions(visionFiles, {
+    baseOptions: { modelAssetPath: HAND_MODEL, delegate: dg },
+    runningMode: 'VIDEO', numHands: 2,
+    minHandDetectionConfidence: 0.4, minHandPresenceConfidence: 0.4, minTrackingConfidence: 0.4,
+  });
+  delegate = dg;
+}
+async function fallbackToCPU() {
+  if (switching || delegate === 'CPU') return;
+  switching = true; handLandmarker = null;
+  try { await createModel('CPU'); } catch (e) { console.error(e); }
+  switching = false;
+}
+
+// 카메라 화면 속 점(0~1)을 실제 화면 좌표로 (거울 모드 + 화면 꽉 채우기 반영)
+function toScreen(p) {
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+  const scale = Math.max(W / vw, H / vh);
+  const offX = (W - vw * scale) / 2, offY = (H - vh * scale) / 2;
+  return { x: W - (p.x * vw * scale + offX), y: p.y * vh * scale + offY };
+}
+
+let handLms = [], handedness = [];
+window.trackFrame = () => {
+  if (handLandmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    try {
+      const r = handLandmarker.detectForVideo(video, performance.now());
+      handLms = r.landmarks || [];
+      handedness = (r.handedness || []).map(x => x && x[0] ? x[0].categoryName : '');
+    } catch (e) { console.error(e); fallbackToCPU(); }
+  }
+  window.handData = handLms.map((lm, k) => {
+    const s = i => toScreen(lm[i]);
+    const thumb = s(4), index = s(8), wrist = s(0), size = Math.hypot(wrist.x - s(9).x, wrist.y - s(9).y) || 1;
+    // 주먹: 손가락 끝들이 손목 가까이 모이면 주먹 쥔 걸로 봄 (집기 대신 써도 잡힘)
+    const curl = [8, 12, 16, 20].reduce((a, i) => a + Math.hypot(s(i).x - wrist.x, s(i).y - wrist.y), 0) / 4 / size;
+    const palm = s(9);
+    return {
+      id: handedness[k] || 'h' + k,          // 왼손·오른손을 구분해서 손이 바뀌어도 헷갈리지 않게
+      tips: [index, s(12), s(16)],           // 검지·중지·약지 끝 (꾹꾹 누르기)
+      grip: { x: (thumb.x + index.x + palm.x) / 3, y: (thumb.y + index.y + palm.y) / 3 },   // 잡는 위치
+      pinchRatio: Math.hypot(thumb.x - index.x, thumb.y - index.y) / size,
+      fist: curl < 0.95,
+    };
+  });
+};
+
+try {
+  visionFiles = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+  try { await createModel('GPU'); }
+  catch (e) { console.warn('GPU 실패, CPU로 다시 시도', e); await createModel('CPU'); }
+} catch (e) {
+  console.warn('손 인식을 불러오지 못했어요. 마우스로 대신할 수 있어요.', e);
+}
+</script>
+</body>
+</html>
